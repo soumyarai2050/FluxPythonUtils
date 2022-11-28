@@ -1,0 +1,6 @@
+# Logger Config: if you need to change to other level please write level name like "debug", "error"
+email_logger_level: "debug"
+
+# email automation test-case
+service_name: "gmail"
+test_email: {username: "Your Name", address: "your.email@gmail.com"}

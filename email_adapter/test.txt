@@ -1,0 +1,1 @@
+This is test doc to be sent on mail by email automation script's test case
