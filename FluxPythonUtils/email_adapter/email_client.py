@@ -1,133 +1,26 @@
-import json
-import os
-import time
-from datetime import datetime
-from dateutil import parser
-import re
 import base64
-import quopri
-import logging
-from email import encoders
-from email.utils import parseaddr
-import smtplib
 import email
 import imaplib
-from email.mime.text import MIMEText
+import json
+import logging
+import quopri
+import re
+import smtplib
+import time
+from datetime import datetime
+from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
-from typing import List, Optional, Tuple, Final
+from email.mime.text import MIMEText
+from email.utils import parseaddr
+from typing import List, Tuple
+
 from bs4 import BeautifulSoup
-from config.configuration import Configuration
+from dateutil import parser
 
-# FluxPythonUtils modules
-from FluxPythonUtils.scripts.utility_functions import yaml_loader, configure_logger, file_exist
-
-
-class EmailUser:
-    def __init__(self, username: str, email_address: str):
-        self.__username: str = username
-        self.__email_address: str = email_address
-
-    @property
-    def username(self):
-        return self.__username
-
-    @property
-    def email_address(self):
-        return self.__email_address
-
-    def __str__(self):
-        return f"{self.__username} <{self.__email_address}>"
-
-
-class Attachment:
-    """
-    Class for attachments to be used as objects for every attachment in read/write email method
-    """
-
-    def __init__(self, file_path: str, payload):
-        if file_path is None:
-            logging.exception("file_path not provided as parameter in attachment initialization")
-            raise Exception("file_path can't be empty, provide it at the time of initialization")
-        self.__file_path: Final[str] = file_path
-        self.__payload: Final = payload
-        self.__size: Final[int] = len(self.__payload)
-
-    @property
-    def file_path(self):
-        return self.__file_path
-
-    @property
-    def payload(self):
-        return self.__payload
-
-    @property
-    def size(self):
-        return self.__size
-
-    def __str__(self):
-        return f"attachment file_path: {self.__file_path}"
-
-
-class Email:
-    def __init__(self, sender_user_obj: EmailUser, to_user_obj_list: List[EmailUser],
-                 cc_user_obj_list: Optional[List[EmailUser]] = None,
-                 subject: str | None = None,
-                 attachments_list: Optional[List[Attachment]] = None,
-                 content: str | None = None,
-                 message_id: str | None = None, mail_time: datetime | None = None):
-        self.__sender_user_obj: EmailUser = sender_user_obj
-        self.__to_user_obj_list: Final[List[EmailUser]] = to_user_obj_list
-        self.__cc_user_obj_list: Final[List[EmailUser]] = cc_user_obj_list if cc_user_obj_list is not None else []
-        self.__subject: str = subject if subject is not None else ""
-        self.__attachments_list: List[Attachment] = attachments_list if attachments_list is not None else []
-        self.__content: str = content
-        self.__message_id: str = message_id if message_id is not None else ""
-        self.__mail_time: datetime = mail_time if mail_time is not None else datetime.now()
-
-    @property
-    def message_id(self):
-        return self.__message_id
-
-    @property
-    def sender_user_obj(self):
-        return self.__sender_user_obj
-
-    @property
-    def to_user_obj_list(self):
-        return self.__to_user_obj_list
-
-    @property
-    def cc_user_obj_list(self):
-        return self.__cc_user_obj_list
-
-    @property
-    def subject(self):
-        return self.__subject
-
-    @property
-    def content(self):
-        return self.__content
-
-    @property
-    def mail_time(self):
-        return self.__mail_time
-
-    @property
-    def attachments_list(self):
-        return self.__attachments_list
-
-    def __str__(self):
-        return f"""
-                msg-id: {self.__message_id}
-                from: {self.__sender_user_obj.username} <{self.__sender_user_obj.email_address}>
-                to: {[str(to) for to in self.__to_user_obj_list]}
-                cc: {[str(cc) for cc in self.__cc_user_obj_list]}
-                time: {self.__mail_time.strftime("%d-%m-%y %H:%M:%S")}
-                subject: {self.__subject}
-                content: {self.__content}
-                attachments: {[str(attachment) for attachment in self.__attachments_list]}
-                """
+from FluxPythonUtils.email_adapter.email_automation import Attachment, EmailUser
+from FluxPythonUtils.email_adapter.email import Email
+from FluxPythonUtils.scripts.utility_functions import file_exist
 
 
 class EmailClient:
@@ -304,7 +197,7 @@ class EmailClient:
         """
         Method to read received mails in user's account
         Takes 3 optional parameters:
-        latest: Default: true, means the latest mails will be provided. If turned false starts from first mail of inbox.
+        latest: Default is true, means latest mails will be provided. If turned false starts from first mail of inbox.
         unread: If unread is True, UNSEEN mails are fetched else All mails are fetched
         number_of_mails: Total number of mails to return, if not provided will fetch last 10 mails
         mail-section: default is inbox
@@ -345,7 +238,7 @@ class EmailClient:
         """
         Method to fetch and return the list of email objects from the server of service.
         Takes search_query to fetch specific mails, latest as bool which, if true means latest mails will be first
-        in order else oldest mails will be first in order, number of mails to get specific numbe rof mails in
+        in order else oldest mails will be first in order, number of mails to get specific number of mails in
         returned list and delete mail as bool to specify if True means selected mails needs to be deleted else
         just returned as list of mails
         This method returns either empty list of email objects, that means fetched mails where deleted as deleted
@@ -469,7 +362,7 @@ class EmailClient:
         """
         username: str = email_obj.sender_user_obj.username
         subject: str = email_obj.subject
-        time: datetime = email_obj.mail_time
+        date_time: datetime = email_obj.mail_time
         empty_lines_removed_body: str = "".join(email_obj.content.splitlines())
         if "." in empty_lines_removed_body and (index := empty_lines_removed_body.index(".")) < body_slice_length:
             summarized_body = empty_lines_removed_body[:index + 1]
@@ -481,7 +374,7 @@ class EmailClient:
             summarized_body = empty_lines_removed_body[:body_slice_length] + "..."
 
         summarized_content: str = f"""
-                                  {username}        {time.strftime("%H:%M")}
+                                  {username}        {date_time.strftime("%H:%M")}
                                   {subject}
                                   {summarized_body} 
                                   """
@@ -546,7 +439,8 @@ class EmailClient:
         else:
             before_date_query: str = f''
 
-        search_combination: str = f'{msg_id_query} {from_query} {subject_query} {body_query} {on_date_query} {from_date_query} {before_date_query}'
+        search_combination: str = f'{msg_id_query} {from_query} {subject_query} {body_query} {on_date_query} ' \
+                                  f'{from_date_query} {before_date_query}'
         search_query: str = f'({search_combination.strip()})'
 
         if not mark_read:
@@ -613,72 +507,3 @@ class EmailClient:
             # message_id already exist in class data-member then ignore process and loop to next mail object
             time.sleep(loop_wait_time)
         return return_email_obj_list
-
-
-if __name__ == "__main__":
-    def test():
-        project_name: str = "FluxPythonUtils"
-        config_obj = Configuration.get_instance(project_name)
-        config = yaml_loader(config_obj.yaml_config_path)
-        secret = yaml_loader(config_obj.yaml_secret_path)
-
-        logger_level: str = config["email_logger_level"]
-        configure_logger(logger_level, config_obj.log_file_path)
-
-        service_name: str = config["service_name"]
-
-        # use username or email to log in
-        username: str = config["cyber_investigator_gmail_email"]["address"]
-        password: str = secret["cyber_investigator_gmail_pw"]
-        attachments_paths: List[str] = [
-            os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__))), "test.jpg"),
-            os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__))), "test.txt")
-        ]
-
-        attachments_list: List[Attachment] = list()
-        for path in attachments_paths:
-            with open(path, "rb") as payload:
-                attachment: Attachment = Attachment(path, payload.read())
-            attachments_list.append(attachment)
-
-        to_addresses: List[EmailUser] = [EmailUser(
-            config["cyinve_email"]["username"],
-            config["cyinve_email"]["address"]
-        )]
-        cc_addresses: List[EmailUser] = [EmailUser(
-            config["test_email"]["username"],
-            config["test_email"]["address"]
-        )]
-        mail_subject: str = "Test"
-        mail_body: str = "Testing mail with attachments"
-        sender_obj: EmailUser = EmailUser(
-            config["cyber_investigator_gmail_email"]["username"],
-            config["cyber_investigator_gmail_email"]["address"]
-        )
-
-        email_obj: Email = Email(sender_obj, to_addresses, cc_addresses, mail_subject, attachments_list, mail_body)
-
-        email_automation: EmailClient = EmailClient(project_name, service_name, username, password)
-
-        # Test-case: Send Email
-        # print(email_automation.send_mail(email_obj))
-
-        # Test-case: Read Email
-        # email_list: List[Email] = email_automation.read_mail(number_of_mails=10, unread=True)
-        # for email_obj in email_list:
-        #     logging.info(email_obj)
-        #     logging.info(email_automation.summarize_body(email_obj))
-
-        # Test-case: Search Email
-        # searched_mails: List[Email] = email_automation.search_mails(
-        #     from_address= "some-email@outlook.com",
-        #     contained_string_subject="test",
-        #     contained_string_body="test")
-        #
-        # print("*"*100)
-
-        # Test-case: Delete Email
-        # status: bool = email_automation.delete_mail(searched_mails[-1])
-        # print(status)
-
-    test()

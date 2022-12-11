@@ -69,7 +69,7 @@ instance/
 .scrapy
 
 # Sphinx documentation
-docs/_build/
+Docs/_build/
 
 # PyBuilder
 target/
@@ -127,3 +127,9 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# User defined ignore files
+/config/secret.py
+/SampleChatBot/*.db
+/config/secret.yaml
+/email_adapter/config/secret.yaml

@@ -14,21 +14,14 @@ def makedir(path: str) -> None:
     """
     Function to make directory. Takes complete path as input argument.
     """
-    cmd = px.spawn(f"mkdir {path}")
-    # cmd.logfile = sys.stdout.buffer       # just showing output while debugging so commented when done
-    cmd.timeout = None
-    cmd.expect(px.EOF)
-    cmd.sendline("exit")
+    os.mkdir(path)
 
 
 def delete_file(path: str) -> None:
     """
     Function to delete file. Takes complete path as input argument.
     """
-    cmd = px.spawn(f"rm {path}")
-    # cmd.logfile = sys.stdout.buffer       # just showing output while debugging so commented when done
-    cmd.timeout = None
-    cmd.expect(px.EOF)
+    os.remove(path)
 
 
 def file_exist(path: str) -> bool:
