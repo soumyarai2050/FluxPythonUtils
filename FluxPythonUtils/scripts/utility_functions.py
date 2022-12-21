@@ -53,18 +53,23 @@ def package_install_checker(package_name: str) -> bool:
     return True
 
 
-def configure_logger(level: str, log_file_path: str) -> None:
+def configure_logger(level: str, log_file_dir_path: str | None = None, log_file_name: str | None = None) -> None:
     """
     Function to config the logger in your trigger script of your project, creates log file in given log_dir_path.
     Takes project_name as parameter to fetch Level from configurations.py.
     """
-    if ".log" not in (log_file_name := log_file_path.split(os.sep)[-1]):
-        makedir(log_file_path)
-        log_file_path: str = os.path.join(log_file_path, "logs.log")
+    if log_file_name is None:
+        log_file_name = "logs.log"
+    # else not required: if file exists then using that name
+
+    if log_file_dir_path is not None:
+        os.makedirs(log_file_dir_path, exist_ok=True)
+        log_file_path: str = os.path.join(log_file_dir_path, log_file_name)
     else:
-        # Creating directory if not already exist (removing file name from path below)
-        makedir(f"{os.sep}".join(log_file_path.split(os.sep)[:-1]))
-        log_file_path: str = os.path.join(log_file_path, log_file_name)
+        log_file_path: str = log_file_name
+
+    with open(log_file_path, "w+") as fl:
+        pass
 
     if level is not None:
         """
@@ -74,19 +79,20 @@ def configure_logger(level: str, log_file_path: str) -> None:
         INFO	    20
         DEBUG	    10
         """
-        if level.lower() == "debug":
-            level = logging.DEBUG
-        elif level.lower() == "info":
-            level = logging.INFO
-        elif level.lower() == "warning":
-            level = logging.WARNING
-        elif level.lower() == "error":
-            level = logging.ERROR
-        elif level.lower() == "critical":
-            level = logging.CRITICAL
-        else:
-            error_msg: str = f"Unsupported logging level: {level}"
-            raise Exception(error_msg)
+        match level:
+            case "debug":
+                level = logging.DEBUG
+            case "info":
+                level = logging.INFO
+            case "warning":
+                level = logging.WARNING
+            case "error":
+                level = logging.ERROR
+            case "critical":
+                level = logging.CRITICAL
+            case other:
+                error_msg: str = f"Unsupported logging level: {level}"
+                raise Exception(error_msg)
     else:
         error_msg: str = f"logger level cant be none"
         raise Exception(error_msg)
