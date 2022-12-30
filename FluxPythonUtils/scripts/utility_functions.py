@@ -2,12 +2,64 @@ import os
 import pexpect as px
 import logging
 import re
-from typing import List, Optional
+from typing import List, Type
 import yaml
+from enum import IntEnum
+import json
+from requests import Response, post
 # FluxPythonUtils Modules
 from FluxPythonUtils.scripts.yaml_importer import YAMLImporter
 
-# Script containing all the utility and handy functions
+# Script containing all the utility: handy functions / classes / decorators
+
+
+def log_n_except(original_function):
+    def wrapper_function(*args, **kwargs):
+        try:
+            result = original_function(*args, **kwargs)
+            return result
+        except Exception as e:
+            err_str = f"Client Error Occurred in function: {original_function.__name__}, args: {args}, kwargs: {kwargs}, exception: {e}"
+            logging.exception(err_str)
+            raise Exception(err_str)
+    return wrapper_function
+
+
+class HTTPRequestType(IntEnum):
+    UNSPECIFIED = 0
+    GET = 1
+    POST = 2
+    DELETE = 3
+    PUT = 4
+    PATCH = 5
+
+
+def http_response_as_class_type(url, response, expected_status_code, pydantic_type: Type, http_request_type: HTTPRequestType):
+    status_code, response_json = handle_http_response(response)
+    if status_code == expected_status_code:
+        return pydantic_type(**response_json)
+    else:
+        raise Exception(f"failed for url: {url}, http_+request_type: {str(http_request_type)} http_error: {response_json}, status_code: {status_code}")
+
+
+def handle_http_response(response: Response):
+    if response is None:
+        return '{"error: passed response is None - no http response to handle!"}'
+    if response.ok:
+        return response.status_code, json.loads(response.content)
+    if response.content is not None:
+        try:
+            content = json.loads(response.content)
+        except json.JSONDecodeError as e:
+            if response.reason is not None:
+                content = response.reason
+                if response.text is not None:
+                    content += (" text: " + response.text)
+                return response.status_code, content
+            elif response.text is not None:
+                return response.status_code, response.text
+            else:
+                return response.status_code, None
 
 
 def makedir(path: str) -> None:
@@ -44,7 +96,7 @@ def package_install_checker(package_name: str) -> bool:
     Function to check if package is installed, returns True if installed and False otherwise.
     """
     chk_cmd = px.spawn(f"apt-cache policy {package_name}")
-    # chk_cmd.logfile = sys.stdout.buffer        # Just showing output of cmd when executed, so commented after debugging
+    # chk_cmd.logfile = sys.stdout.buffer  # Just shows output of cmd when executed, not-needed (for debug)
     chk_cmd.timeout = None
     chk_cmd.expect(px.EOF)
     cmd_output = chk_cmd.before.decode("utf-8").splitlines()
