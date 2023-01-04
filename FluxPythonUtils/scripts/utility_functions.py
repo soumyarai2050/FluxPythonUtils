@@ -2,12 +2,64 @@ import os
 import pexpect as px
 import logging
 import re
-from typing import List, Optional
+from typing import List, Type
 import yaml
+from enum import IntEnum
+import json
+from requests import Response, post
 # FluxPythonUtils Modules
 from FluxPythonUtils.scripts.yaml_importer import YAMLImporter
 
-# Script containing all the utility and handy functions
+# Script containing all the utility: handy functions / classes / decorators
+
+
+def log_n_except(original_function):
+    def wrapper_function(*args, **kwargs):
+        try:
+            result = original_function(*args, **kwargs)
+            return result
+        except Exception as e:
+            err_str = f"Client Error Occurred in function: {original_function.__name__}, args: {args}, kwargs: {kwargs}, exception: {e}"
+            logging.exception(err_str)
+            raise Exception(err_str)
+    return wrapper_function
+
+
+class HTTPRequestType(IntEnum):
+    UNSPECIFIED = 0
+    GET = 1
+    POST = 2
+    DELETE = 3
+    PUT = 4
+    PATCH = 5
+
+
+def http_response_as_class_type(url, response, expected_status_code, pydantic_type: Type, http_request_type: HTTPRequestType):
+    status_code, response_json = handle_http_response(response)
+    if status_code == expected_status_code:
+        return pydantic_type(**response_json)
+    else:
+        raise Exception(f"failed for url: {url}, http_+request_type: {str(http_request_type)} http_error: {response_json}, status_code: {status_code}")
+
+
+def handle_http_response(response: Response):
+    if response is None:
+        return '{"error: passed response is None - no http response to handle!"}'
+    if response.ok:
+        return response.status_code, json.loads(response.content)
+    if response.content is not None:
+        try:
+            content = json.loads(response.content)
+        except json.JSONDecodeError as e:
+            if response.reason is not None:
+                content = response.reason
+                if response.text is not None:
+                    content += (" text: " + response.text)
+                return response.status_code, content
+            elif response.text is not None:
+                return response.status_code, response.text
+            else:
+                return response.status_code, None
 
 
 def makedir(path: str) -> None:
@@ -44,7 +96,7 @@ def package_install_checker(package_name: str) -> bool:
     Function to check if package is installed, returns True if installed and False otherwise.
     """
     chk_cmd = px.spawn(f"apt-cache policy {package_name}")
-    # chk_cmd.logfile = sys.stdout.buffer        # Just showing output of cmd when executed, so commented after debugging
+    # chk_cmd.logfile = sys.stdout.buffer  # Just shows output of cmd when executed, not-needed (for debug)
     chk_cmd.timeout = None
     chk_cmd.expect(px.EOF)
     cmd_output = chk_cmd.before.decode("utf-8").splitlines()
@@ -142,3 +194,66 @@ def load_yaml_configurations(config_file_path: str | None = None,
             err_str = f"No file: {config_file_path} exist"
             logging.exception(err_str)
             raise Exception(err_str)
+
+
+def find_acronyms_in_string(data: str) -> List[str]:
+    return re.findall(r"[A-Z]{2,}", data)
+
+
+def convert_camel_case_to_specific_case(data: str, char_to_be_added: str = '_', lower_case: bool = True):
+    """
+    Converts Camel cased vale to specific case. For Example snake case
+    Parameters:
+    -----------
+        data: [str] Camel cased value to be converted
+        char_to_be_added: [str]: Default: '_'
+            character to be added between words to replace camel
+            case to specific case like snake_case using '_' between words
+        lower_case: [bool] make return as lower_value if True else ignore
+    """
+
+    if acronyms_list := find_acronyms_in_string(data):
+        for acronym in acronyms_list:
+            if data.startswith(acronym):
+                data = data.replace(acronym, acronym[:-1].lower()+acronym[-1])
+            elif data.endswith(acronym):
+                data = data.replace(acronym, "_"+acronym.lower())
+            else:
+                data = data.replace(acronym, "_"+acronym[:-1].lower()+acronym[-1])
+    # else not required: If data doesn't contain acronym then ignore
+
+    if lower_case:
+        return re.sub(r'(?<!^)(?=[A-Z])', char_to_be_added, data).lower()
+    else:
+        return re.sub(r'(?<!^)(?=[A-Z])', char_to_be_added, data)
+
+
+def capitalized_to_camel_case(value: str) -> str:
+    if acronyms_list := find_acronyms_in_string(value):
+        for acronym in acronyms_list:
+            if value.startswith(acronym):
+                return value.replace(acronym, acronym[:-1].lower()+acronym[-1])
+    # else not required: If data doesn't contain acronym then ignore
+
+    return "".join([value[0].lower(), value[1:]])
+
+
+def non_capitalized_to_camel_case(value: str) -> str:
+    value = re.sub(r"(_|-)+", " ", value).title().replace(" ", "")
+    return "".join([value[0].lower(), value[1:]])
+
+
+def convert_to_camel_case(value: str) -> str:
+    if value != value.lower() and value != value.upper() and "_" not in value:
+        if value[0].isupper():
+            return capitalized_to_camel_case(value)
+        else:
+            return value
+    else:
+        return non_capitalized_to_camel_case(value)
+
+
+def convert_to_capitalized_camel_case(value: str) -> str:
+    value_camel_cased = convert_to_camel_case(value)
+    return value_camel_cased[0].upper() + value_camel_cased[1:]
+
