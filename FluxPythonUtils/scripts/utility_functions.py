@@ -1,16 +1,23 @@
 import os
-import pexpect as px
 import logging
 import re
-from typing import List, Type
+from typing import List, Dict, Type
 import yaml
 from enum import IntEnum
 import json
-from requests import Response, post
+from pathlib import PurePath
+import csv
+from requests import Response
+
+# other packages
+from pydantic import BaseModel
+import pandas as pd
+
 # FluxPythonUtils Modules
 from FluxPythonUtils.scripts.yaml_importer import YAMLImporter
 
-# Script containing all the utility: handy functions / classes / decorators
+
+# Script containing all the utility: handy functions / classes / enums /decorators
 
 
 def log_n_except(original_function):
@@ -19,9 +26,11 @@ def log_n_except(original_function):
             result = original_function(*args, **kwargs)
             return result
         except Exception as e:
-            err_str = f"Client Error Occurred in function: {original_function.__name__}, args: {args}, kwargs: {kwargs}, exception: {e}"
+            err_str = f"Client Error Occurred in function: {original_function.__name__}, args: {args}, " \
+                      f"kwargs: {kwargs}, exception: {e}"
             logging.exception(err_str)
             raise Exception(err_str)
+
     return wrapper_function
 
 
@@ -34,12 +43,14 @@ class HTTPRequestType(IntEnum):
     PATCH = 5
 
 
-def http_response_as_class_type(url, response, expected_status_code, pydantic_type: Type, http_request_type: HTTPRequestType):
+def http_response_as_class_type(url, response, expected_status_code, pydantic_type: Type,
+                                http_request_type: HTTPRequestType):
     status_code, response_json = handle_http_response(response)
     if status_code == expected_status_code:
         return pydantic_type(**response_json)
     else:
-        raise Exception(f"failed for url: {url}, http_+request_type: {str(http_request_type)} http_error: {response_json}, status_code: {status_code}")
+        raise Exception(f"failed for url: {url}, http_+request_type: {str(http_request_type)} "
+                        f"http_error: {response_json}, status_code: {status_code}")
 
 
 def handle_http_response(response: Response):
@@ -47,12 +58,40 @@ def handle_http_response(response: Response):
         return '{"error: passed response is None - no http response to handle!"}'
     if response.ok:
         return response.status_code, json.loads(response.content)
+    response_err_str: str | None = ""
+    if response.content is not None:
+        response_err_str += f"content: {response.content} "
+    if response.reason is not None:
+        response_err_str += f"reason: {response.reason} "
+    if response.text is not None:
+        response_err_str += f"text: {response.text} "
+    if len(response_err_str) == 0:
+        response_err_str = None
+    return response.status_code, response_err_str
+
+
+def handle_http_response_extended(response: Response):
+    if response is None:
+        return '{"error: passed response is None - no http response to handle!"}'
+    if response.ok:
+        return response.status_code, json.loads(response.content)
     if response.content is not None:
         try:
             content = json.loads(response.content)
+            if 'errors' in content:
+                return response.status_code, content['errors']
+            if 'error' in content:
+                if 'message' in content:
+                    content ['error'] = content['error'] + " message- " + content ['message']
+                return response.status_code, content['error']
+            if 'messages' in content:
+                return response. status_code, content['messages']
+            if 'detail' in content:
+                return response.status_code, content['detail']
         except json.JSONDecodeError as e:
+            # handle as error
             if response.reason is not None:
-                content = response.reason
+                content = response. reason
                 if response.text is not None:
                     content += (" text: " + response.text)
                 return response.status_code, content
@@ -60,6 +99,56 @@ def handle_http_response(response: Response):
                 return response.status_code, response.text
             else:
                 return response.status_code, None
+    return response.status_code, None
+
+
+def dict_or_list_records_csv_writer(file_name: str, records: Dict | List, fieldnames, record_type,
+                                    data_dir: PurePath | None = None):
+    """
+    fieldnames can be subset of flelds you wish to write in esy constraints:
+    records can be collection of Dict or List
+    specific record MUST support dict() method
+    """
+    if data_dir is None:
+        data_dir = PurePath(__file__).parent / "data"
+    csv_path = PurePath(data_dir / f"{file_name}.csv")
+    with open(csv_path, "w", encoding="utf-8", newline='') as fp:
+        writer = csv.DictWriter(fp, fieldnames=fieldnames, extrasaction='ignore')
+        writer.writeheader()
+        if isinstance(records, Dict):
+            for record in records.values():
+                writer.writerow(json.loads(record_type(**record.dict()).json()))
+        elif isinstance(records, List):
+            for record in records:
+                writer.writerow(json.loads(record_type(**record.dict()).json()))
+        else:
+            raise Exception(
+                f"Unexpected: Un-supported type passed, expected Dict or List found type: {type(records)} of "
+                f"object: {str(records)}")
+
+
+def dict_or_list_records_csv_reader(file_name: str, PydanticType: Type[BaseModel], data_dir: PurePath | None = None) \
+        -> List[BaseModel]:
+    """
+    At this time the method only supports list of pydantic_type extraction form csv
+    """
+
+    class PydanticClassTypeList(BaseModel):
+        __root__: List[PydanticType]
+
+    if data_dir is None:
+        data_dir = PurePath(__file__).parent / "data"
+    csv_path = PurePath(data_dir / f"{file_name}.csv")
+    read_df = pd.read_csv(csv_path, keep_default_na=False)
+    data_dict_list = read_df.to_dict(orient='records')
+    record_dict = {"__root__": data_dict_list}
+    pydantic_obj_list: PydanticClassTypeList = PydanticClassTypeList(**record_dict)
+    return pydantic_obj_list.__root__
+
+
+def str_from_file(file_path: str) -> str:
+    with open(file_path, "r", encoding="utf-8", newline='') as fp:
+        return fp.read()
 
 
 def makedir(path: str) -> None:
@@ -89,20 +178,6 @@ def file_exist(path: str) -> bool:
     bool: Returns True if file exists and else otherwise.
     """
     return os.path.exists(path)
-
-
-def package_install_checker(package_name: str) -> bool:
-    """
-    Function to check if package is installed, returns True if installed and False otherwise.
-    """
-    chk_cmd = px.spawn(f"apt-cache policy {package_name}")
-    # chk_cmd.logfile = sys.stdout.buffer  # Just shows output of cmd when executed, not-needed (for debug)
-    chk_cmd.timeout = None
-    chk_cmd.expect(px.EOF)
-    cmd_output = chk_cmd.before.decode("utf-8").splitlines()
-    if "N: Unable to locate package" in cmd_output[0] or "Installed: (none)" in cmd_output[1]:
-        return False
-    return True
 
 
 def configure_logger(level: str, log_file_dir_path: str | None = None, log_file_name: str | None = None) -> None:
@@ -215,11 +290,11 @@ def convert_camel_case_to_specific_case(data: str, char_to_be_added: str = '_', 
     if acronyms_list := find_acronyms_in_string(data):
         for acronym in acronyms_list:
             if data.startswith(acronym):
-                data = data.replace(acronym, acronym[:-1].lower()+acronym[-1])
+                data = data.replace(acronym, acronym[:-1].lower() + acronym[-1])
             elif data.endswith(acronym):
-                data = data.replace(acronym, "_"+acronym.lower())
+                data = data.replace(acronym, "_" + acronym.lower())
             else:
-                data = data.replace(acronym, "_"+acronym[:-1].lower()+acronym[-1])
+                data = data.replace(acronym, "_" + acronym[:-1].lower() + acronym[-1])
     # else not required: If data doesn't contain acronym then ignore
 
     if lower_case:
@@ -232,7 +307,7 @@ def capitalized_to_camel_case(value: str) -> str:
     if acronyms_list := find_acronyms_in_string(value):
         for acronym in acronyms_list:
             if value.startswith(acronym):
-                return value.replace(acronym, acronym[:-1].lower()+acronym[-1])
+                return value.replace(acronym, acronym[:-1].lower() + acronym[-1])
     # else not required: If data doesn't contain acronym then ignore
 
     return "".join([value[0].lower(), value[1:]])
@@ -256,4 +331,3 @@ def convert_to_camel_case(value: str) -> str:
 def convert_to_capitalized_camel_case(value: str) -> str:
     value_camel_cased = convert_to_camel_case(value)
     return value_camel_cased[0].upper() + value_camel_cased[1:]
-
