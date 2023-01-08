@@ -17,7 +17,7 @@ import pandas as pd
 from FluxPythonUtils.scripts.yaml_importer import YAMLImporter
 
 
-# Script containing all the utility: handy functions / classes / enums /decorators
+# Script containing all the utility: handy functions / classes / enums / decorators
 
 
 def log_n_except(original_function):
@@ -82,16 +82,16 @@ def handle_http_response_extended(response: Response):
                 return response.status_code, content['errors']
             if 'error' in content:
                 if 'message' in content:
-                    content ['error'] = content['error'] + " message- " + content ['message']
+                    content['error'] = content['error'] + " message- " + content['message']
                 return response.status_code, content['error']
             if 'messages' in content:
-                return response. status_code, content['messages']
+                return response.status_code, content['messages']
             if 'detail' in content:
                 return response.status_code, content['detail']
         except json.JSONDecodeError as e:
             # handle as error
             if response.reason is not None:
-                content = response. reason
+                content = response.reason
                 if response.text is not None:
                     content += (" text: " + response.text)
                 return response.status_code, content
@@ -105,9 +105,10 @@ def handle_http_response_extended(response: Response):
 def dict_or_list_records_csv_writer(file_name: str, records: Dict | List, fieldnames, record_type,
                                     data_dir: PurePath | None = None):
     """
-    fieldnames can be subset of flelds you wish to write in esy constraints:
-    records can be collection of Dict or List
-    specific record MUST support dict() method
+    fieldnames can be subset of fields you wish to write in CSV
+    constraints:
+    1. records can be collection of Dict or List
+    2. specific record MUST support dict() method
     """
     if data_dir is None:
         data_dir = PurePath(__file__).parent / "data"
