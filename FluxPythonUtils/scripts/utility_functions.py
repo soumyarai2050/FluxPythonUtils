@@ -17,36 +17,36 @@ import pandas as pd
 # FluxPythonUtils Modules
 from FluxPythonUtils.scripts.yaml_importer import YAMLImporter
 
-
 BaseModelOrItsDerivedType = TypeVar('BaseModelOrItsDerivedType', BaseModel, Callable)
 
 
 # Script containing all the utility: handy functions / classes / enums / decorators
 
-class EmptyFileError(Exception) :
+class EmptyFileError(Exception):
     """Exception raised for unexpected empty file.
     Attributes:
-        file path -- file path that was found with empty file
+        file_path -- file path that was found with empty file
         message -- brief explanation of the error (file path passed is auto-appended f-str below)
     """
 
-    def __init__(self, file_path: str, message: str ="Empty file found!"):
+    def __init__(self, file_path: str, message: str = "Empty file found!"):
         self.file_path = file_path
         self.message = message
-        super().__init__(f"{self.message}, file _path: {self.file_path}")
+        super().__init__(f"{self.message}, file_path: {self.file_path}")
 
 
-class ServieUnavailable(Exception) :
+class ServieUnavailable(Exception):
     """Exception raised to represent service unavailability.
 
     Attributes:
         file_path -- file path that was found with empty file
         message -- brief explanation of the error (file path passed is auto-appended f-str below)
     """
+
     def __init__(self, file_path: str, message: str = "Empty file found!"):
         self.file_path = file_path
         self.message = message
-        super().__init__(f"{self.message}, file _path: {self.file_path}")
+        super().__init__(f"{self.message}, file_path: {self.file_path}")
 
 
 def log_n_except(original_function):
@@ -76,9 +76,12 @@ def http_response_as_class_type(url, response, expected_status_code, pydantic_ty
                                 http_request_type: HTTPRequestType):
     status_code, response_json = handle_http_response(response)
     if status_code == expected_status_code:
-        return pydantic_type(**response_json)
+        if isinstance(response_json, list):
+            return [pydantic_type(**response_obj) for response_obj in response_json]
+        else:
+            return pydantic_type(**response_json)
     else:
-        raise Exception(f"failed for url: {url}, http_+request_type: {str(http_request_type)} "
+        raise Exception(f"failed for url: {url}, http_request_type: {str(http_request_type)} "
                         f"http_error: {response_json}, status_code: {status_code}")
 
 
@@ -157,7 +160,8 @@ def dict_or_list_records_csv_writer(file_name: str, records: Dict | List, fieldn
                 f"object: {str(records)}")
 
 
-def dict_or_list_records_csv_reader(file_name: str, PydanticType: BaseModelOrItsDerivedType, data_dir: PurePath | None = None) \
+def dict_or_list_records_csv_reader(file_name: str, PydanticType: BaseModelOrItsDerivedType,
+                                    data_dir: PurePath | None = None) \
         -> List[BaseModel]:
     """
     At this time the method only supports list of pydantic_type extraction form csv
@@ -185,7 +189,7 @@ def str_from_file(file_path: str) -> str:
 
 
 def get_json_array_as_pydantic_dict(json_key: str, json_data_list, PydanticType: Callable) \
-    -> Dict [str, BaseModelOrItsDerivedType]:
+        -> Dict[str, BaseModelOrItsDerivedType]:
     pydantic_dict: Dict[str, BaseModelOrItsDerivedType] = dict()
     for json_data in json_data_list:
         pydantic_key = json_data[json_key]
@@ -203,19 +207,19 @@ def store_json_to_file(file_name: str, json_dict, data_dir: PurePath | None = No
 def store_json_str_to_file(file_name: str, json_str, data_dir: PurePath | None = None, mode="w"):
     if data_dir is None:
         data_dir = PurePath(__file__).parent / "data"
-    json_file_path = PurePath(data_dir / f"(file_name).json")
+    json_file_path = PurePath(data_dir / f"{file_name}.json")
     with open(json_file_path, mode) as outfile:
         outfile.write(json_str)
 
 
 def load_json_from_file(file_name: str, data_dir: PurePath | None = None):
-    if not file_name.endswith(" json"):
+    if not file_name.endswith(".json"):
         if data_dir is None:
             data_dir = PurePath(__file__).parent / "data"
         # else use passed data dir
-        json_file_path = PurePath(data_dir / f"(file_name).json")
-    else: # file name passed is complete file path
-        json_file_path = file_name # filename has path and suffix
+        json_file_path = PurePath(data_dir / f"{file_name}.json")
+    else:  # file name passed is complete file path
+        json_file_path = file_name  # filename has path and suffix
     if os.path.getsize(json_file_path) > 0:
         # Open JSON file
         json_file_obj = open(json_file_path)
@@ -228,7 +232,7 @@ def load_json_from_file(file_name: str, data_dir: PurePath | None = None):
 
 def get_match_file_from_path(file_name_prefix: str, file_name_suffix: str, file_store_root_dir_path: PurePath):
     matched_files: List[any] = list()
-    files_matched = (Path(file_store_root_dir_path)).glob(f" (file_name_prefix] (file_name_suffix]")
+    files_matched = (Path(file_store_root_dir_path)).glob(f"{file_name_prefix}*{file_name_suffix}")
     if files_matched is not None:
         for filename in files_matched:
             matched_files.append(filename)
@@ -237,7 +241,7 @@ def get_match_file_from_path(file_name_prefix: str, file_name_suffix: str, file_
 
 def archive_match_files(file_name_prefix: str, file_store_root_dir_path: PurePath):
     # check match files exist
-    files_to_archive = (Path(file_store_root_dir_path)) .glob(f" (file_name_prefix]*")
+    files_to_archive = (Path(file_store_root_dir_path)).glob(f"{file_name_prefix}*")
     if files_to_archive is not None:
         # delete old archive
         archive_pure_path = file_store_root_dir_path / "archive"
@@ -248,7 +252,7 @@ def archive_match_files(file_name_prefix: str, file_store_root_dir_path: PurePat
         else:
             # cleanup since archive exists
             # remove all file with matching prefixes
-            files_to_delete = archive_path.glob(f"(file_name_prefix)*")
+            files_to_delete = archive_path.glob(f"{file_name_prefix}*")
             for filename in files_to_delete:
                 os.remove(str(filename))
         # move files_to_archive to archive

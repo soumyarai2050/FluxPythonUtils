@@ -3,4 +3,8 @@ email_logger_level: "debug"
 
 # email automation test-case
 service_name: "gmail"
-test_email: {username: "Your Name", address: "your.email@gmail.com"}
+cyber_investigator_gmail_email: {username: "Cyber Investigator", address: "cyberinvestigator2022@gmail.com"}
+cyber_investigator_outlook_email: {username: "Cyber Investigator", address: "cyberinvestigator2022@outlook.com"}
+cyber_investigator_aol_email: {username: "Cyber Investigator", address: "cyberinvestigator2022@aol.com"}
+cyinve_email: {username: "Cyinve AI", address: "cyinveai@gmail.com"}
+personal_email: {username: "Mahesh Sharma", address: "mahesh.sharma2@protonmail.com"}
