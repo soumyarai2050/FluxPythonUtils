@@ -399,12 +399,18 @@ def convert_camel_case_to_specific_case(data: str, char_to_be_added: str = '_', 
 
     if acronyms_list := find_acronyms_in_string(data):
         for acronym in acronyms_list:
-            if data.startswith(acronym):
-                data = data.replace(acronym, acronym[:-1].lower() + acronym[-1])
-            elif data.endswith(acronym):
-                data = data.replace(acronym, "_" + acronym.lower())
+            # If whole provided data is acronym
+            if data == acronym:
+                return data.lower()
+            # else making acronym in data snake-cased before whole data
+            # is going to be converted to snake case (or some specific case)
             else:
-                data = data.replace(acronym, "_" + acronym[:-1].lower() + acronym[-1])
+                if data.startswith(acronym):
+                    data = data.replace(acronym, acronym[:-1].lower() + acronym[-1])
+                elif data.endswith(acronym):
+                    data = data.replace(acronym, char_to_be_added + acronym.lower())
+                else:
+                    data = data.replace(acronym, char_to_be_added + acronym[:-1].lower() + acronym[-1])
     # else not required: If data doesn't contain acronym then ignore
 
     if lower_case:
@@ -441,3 +447,25 @@ def convert_to_camel_case(value: str) -> str:
 def convert_to_capitalized_camel_case(value: str) -> str:
     value_camel_cased = convert_to_camel_case(value)
     return value_camel_cased[0].upper() + value_camel_cased[1:]
+
+
+def avg_of_new_val_sum_to_avg(avg: int | float, new_val: int | float, total_length: int) -> int | float:
+    """
+    Computes average of, average of n numbers + n+1 number
+    :param avg: Last Average val
+    :param new_val: new val to be added
+    :param total_length: Total observations (including new value)
+    :return: new computed average
+    """
+    return avg + ((new_val - avg) / total_length)
+
+
+def avg_of_new_val_sub_to_avg(avg: int | float, new_val: int | float, total_length: int) -> int | float:
+    """
+    Computes average of, average of n numbers - n+1 number
+    :param avg: Last Average val
+    :param new_val: new val to be added
+    :param total_length: Total observations (including new value)
+    :return: new computed average
+    """
+    return (avg * total_length - new_val) / (total_length - 1)

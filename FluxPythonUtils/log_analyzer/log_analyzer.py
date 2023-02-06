@@ -29,7 +29,7 @@ class LogAnalyzer(ABC):
 
     def _analyze_log(self):
         while True:
-            line = self.f.stdout.readline()
+            line = self.f.stdout.readline().decode()
             for error_type, pattern in self.error_patterns.items():
                 match = pattern.search(str(line))
                 if match:

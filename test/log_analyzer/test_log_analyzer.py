@@ -73,8 +73,10 @@ def test_log_analyzer_get_severity(log_analyzer: MockLogAnalyzer):
      "this should be in error brief and has no detail", ""),
     ("this should be in error brief;;;this in error detail ;;; this also in error detail", "Severity_ERROR",
      "this should be in error brief", "this in error detail ;;; this also in error detail"),
-    (" this should be in error brief with surrounding spaces trimmed ;;; this in error detail ;;; this also in error detail with surrounding spaces trimmed ", "Severity_ERROR",
-     "this should be in error brief with surrounding spaces trimmed", "this in error detail ;;; this also in error detail with surrounding spaces trimmed"),
+    (" this should be in error brief with surrounding spaces trimmed ;;; this in error detail ;;; this also in error "
+     " detail with surrounding spaces trimmed ", "Severity_ERROR",
+     "this should be in error brief with surrounding spaces trimmed", "this in error detail ;;; this also in error "
+                                                                      "detail with surrounding spaces trimmed"),
 ])
 def test_create_alert(log_analyzer: MockLogAnalyzer, line, expected_severity, expected_brief, expected_details):
     error_dict: Dict = {'type': 'error', 'line': line}
