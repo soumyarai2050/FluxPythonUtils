@@ -1,6 +1,7 @@
 import os
 import glob
 import logging
+import pickle
 import re
 from typing import List, Dict, Type, TypeVar, Callable
 import yaml
@@ -197,7 +198,7 @@ def get_json_array_as_pydantic_dict(json_key: str, json_data_list, PydanticType:
     return pydantic_dict
 
 
-def store_json_to_file(file_name: str, json_dict, data_dir: PurePath | None = None):
+def store_json_or_dict_to_file(file_name: str, json_dict, data_dir: PurePath | None = None):
     # Serialize json dict
     json_str = json.dumps(json_dict, indent=4)
     # write to json file
@@ -212,7 +213,7 @@ def store_json_str_to_file(file_name: str, json_str, data_dir: PurePath | None =
         outfile.write(json_str)
 
 
-def load_json_from_file(file_name: str, data_dir: PurePath | None = None):
+def load_json_dict_from_file(file_name: str, data_dir: PurePath | None = None, must_exist: bool = True):
     if not file_name.endswith(".json"):
         if data_dir is None:
             data_dir = PurePath(__file__).parent / "data"
@@ -220,6 +221,8 @@ def load_json_from_file(file_name: str, data_dir: PurePath | None = None):
         json_file_path = PurePath(data_dir / f"{file_name}.json")
     else:  # file name passed is complete file path
         json_file_path = file_name  # filename has path and suffix
+    if (not must_exist) and (not file_exist(str(json_file_path))):
+        return None
     if os.path.getsize(json_file_path) > 0:
         # Open JSON file
         json_file_obj = open(json_file_path)
@@ -227,7 +230,7 @@ def load_json_from_file(file_name: str, data_dir: PurePath | None = None):
         json_dict = json.load(json_file_obj)
         return json_dict
     else:
-        raise EmptyFileError(json_file_path, f"load_json_from_file: json file found, but its empty!")
+        raise EmptyFileError(json_file_path, f"load_json_dict_from_file: json file found, but its empty!")
 
 
 def get_match_file_from_path(file_name_prefix: str, file_name_suffix: str, file_store_root_dir_path: PurePath):
@@ -239,7 +242,8 @@ def get_match_file_from_path(file_name_prefix: str, file_name_suffix: str, file_
     return matched_files
 
 
-def archive_match_files(file_name_prefix: str, file_store_root_dir_path: PurePath):
+def archive_match_files(file_name_prefix: str, file_store_root_dir_path: PurePath,
+                        ignore_files: List | None = None, clear_archive: bool = False):
     # check match files exist
     files_to_archive = (Path(file_store_root_dir_path)).glob(f"{file_name_prefix}*")
     if files_to_archive is not None:
@@ -252,13 +256,36 @@ def archive_match_files(file_name_prefix: str, file_store_root_dir_path: PurePat
         else:
             # cleanup since archive exists
             # remove all file with matching prefixes
-            files_to_delete = archive_path.glob(f"{file_name_prefix}*")
-            for filename in files_to_delete:
-                os.remove(str(filename))
+            if clear_archive:
+                files_to_delete = archive_path.glob(f"{file_name_prefix}*")
+                for filename in files_to_delete:
+                    os.remove(str(filename))
         # move files_to_archive to archive
         for filename in files_to_archive:
-            archive_filename = archive_pure_path / os.path.basename(filename)
-            os.rename(filename, archive_filename)
+            if ignore_files is None or (os.path.basename(filename) not in ignore_files):
+                archive_filename = archive_pure_path / os.path.basename(filename)
+                os.rename(filename, archive_filename)
+
+
+def store_to_pickle_file(file_name: str, python_object, data_dir: PurePath | None = None, mode='wb'):
+    if data_dir is None:
+        data_dir = PurePath(__file__).parent / "data"
+    pickle_file_path = PurePath(data_dir / f"{file_name}.pickle")
+    with open(pickle_file_path, mode) as fp:
+        pickle.dump(python_object, fp)
+
+
+def load_from_pickle_file(file_name: str, data_dir: PurePath | None = None, mode='rb'):
+    if data_dir is None:
+        data_dir = PurePath(__file__).parent / "data"
+    pickle_file_path = PurePath(data_dir / f"{file_name}.pickle")
+    if file_exist(str(pickle_file_path)):
+        with open(pickle_file_path, mode) as fp:
+            file_content = fp.read()
+            python_object = pickle.loads (bytes(file_content))
+            return python_object
+    else:
+        return None  # file not found
 
 
 def makedir(path: str) -> None:
@@ -305,7 +332,7 @@ def configure_logger(level: str, log_file_dir_path: str | None = None, log_file_
     else:
         log_file_path: str = log_file_name
 
-    with open(log_file_path, "w+") as fl:
+    with open(log_file_path, "a") as fl:
         pass
 
     if level is not None:
@@ -337,7 +364,8 @@ def configure_logger(level: str, log_file_dir_path: str | None = None, log_file_
     logging.basicConfig(
         filename=log_file_path,
         level=level,
-        format="%(asctime)s : %(levelname)s : [%(filename)s : %(lineno)d] : %(message)s"
+        format="%(asctime)s : %(levelname)s : [%(filename)s : %(lineno)d] : %(message)s",
+        force=True
     )
 
 
