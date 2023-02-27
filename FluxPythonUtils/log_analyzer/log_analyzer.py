@@ -15,14 +15,14 @@ class LogAnalyzer(ABC):
             self.log_file_path_and_name = PurePath(__file__) / "logs.log"
 
         self.error_patterns = {
-            'info': re.compile(r'INFO'),
-            'debug': re.compile(r'DEBUG'),
-            'error': re.compile(r'ERROR'),
+            'error': re.compile(r': ERROR :'),
+            'critical': re.compile(r': CRITICAL :'),
+            'warning': re.compile(r': WARNING :')
         }
         self.severity_map = {
             'error': 'Severity_ERROR',
-            'info': 'Severity_INFO',
-            'debug': 'Severity_DEBUG'
+            'critical': 'Severity_CRITICAL',
+            'warning': 'Severity_WARNING'
         }
         self.f = subprocess.Popen(['tail', '-F', self.log_file_path_and_name], stdout=subprocess.PIPE,
                                   stderr=subprocess.PIPE)

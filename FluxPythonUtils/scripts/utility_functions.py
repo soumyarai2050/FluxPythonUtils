@@ -10,6 +10,7 @@ import json
 from pathlib import PurePath, Path
 import csv
 from requests import Response
+from datetime import datetime
 
 # other packages
 from pydantic import BaseModel
@@ -282,7 +283,7 @@ def load_from_pickle_file(file_name: str, data_dir: PurePath | None = None, mode
     if file_exist(str(pickle_file_path)):
         with open(pickle_file_path, mode) as fp:
             file_content = fp.read()
-            python_object = pickle.loads (bytes(file_content))
+            python_object = pickle.loads(bytes(file_content))
             return python_object
     else:
         return None  # file not found
@@ -332,7 +333,11 @@ def configure_logger(level: str, log_file_dir_path: str | None = None, log_file_
     else:
         log_file_path: str = log_file_name
 
-    with open(log_file_path, "a") as fl:
+    if file_exist(log_file_path):
+        datetime_str: str = datetime.now().strftime("%Y%m%d.%H%M%S")
+        os.rename(log_file_path, f"{log_file_path}.{datetime_str}")
+
+    with open(log_file_path, "w+") as fl:
         pass
 
     if level is not None:
