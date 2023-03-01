@@ -502,3 +502,22 @@ def avg_of_new_val_sub_to_avg(avg: int | float, new_val: int | float, total_leng
     :return: new computed average
     """
     return (avg * total_length - new_val) / (total_length - 1)
+
+
+def parse_string_to_original_types(value: str) -> str | int | bool | float:
+    """
+    Returns int if value string contains only numbers, float if contains only float value,
+    bool if value contains string parsed bool and returns same value if all cases are not matched
+    """
+    # bool check
+    if value in ["True", "False", "true", "false"]:
+        return True if value in ["True", "true"] else False
+    # int check
+    elif value.isdigit():
+        return int(value)
+    # float check
+    elif re.match(r'^-?\d+(?:\.\d+)$', value) is not None:
+        return float(value)
+    # else same str
+    else:
+        return value.strip()
