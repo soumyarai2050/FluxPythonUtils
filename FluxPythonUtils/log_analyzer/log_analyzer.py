@@ -7,7 +7,7 @@ from typing import Dict
 
 class LogAnalyzer(ABC):
 
-    def __init__(self, log_file_path_and_name: str | None):
+    def __init__(self, log_file_path_and_name: str | None, debug_mode: bool = False):
         # todo: if log_file_path_and_name in None then get it from environment variable.
         if log_file_path_and_name is not None:
             self.log_file_path_and_name = log_file_path_and_name
@@ -24,6 +24,15 @@ class LogAnalyzer(ABC):
             'critical': 'Severity_CRITICAL',
             'warning': 'Severity_WARNING'
         }
+        if debug_mode:
+            self.error_patterns.update({
+                'info': re.compile(r': INFO :'),
+                'debug': re.compile(r': DEBUG :')
+            })
+            self.severity_map.update({
+                'info': 'Severity_INFO',
+                'debug': 'Severity_DEBUG'
+            })
         self.f = subprocess.Popen(['tail', '-F', self.log_file_path_and_name], stdout=subprocess.PIPE,
                                   stderr=subprocess.PIPE)
 

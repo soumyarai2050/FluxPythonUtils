@@ -521,3 +521,85 @@ def parse_string_to_original_types(value: str) -> str | int | bool | float:
     # else same str
     else:
         return value.strip()
+
+
+# TODO LAZY - At this time it only prevents adding duplicates - no logical merge - investigate more and generalize
+def _find_matching_list(underlying_updated_list: List, stored_list_of_list: List[List[any]]) -> List[any] | None:
+    matching_list = list()
+    for stored_list in stored_list_of_list:
+        if stored_list == underlying_updated_list:
+            matching_list.append(stored_list)
+    return matching_list
+
+
+def _compare_n_patch_list(stored_list: List, updated_list: List):
+    if stored_list:
+        # get datatype of 1st list element, others must be same datatype (multi datatype list patch not-supported)
+        if isinstance(stored_list[0], list):  # list of list
+            if isinstance(updated_list[0], list):
+                for underlying_updated_list in updated_list:
+                    underlying_stored_list = _find_matching_list(underlying_updated_list, stored_list)
+                    if underlying_stored_list is None:
+                        # this underlying updated list is new - append to stored_list (stored list of list)
+                        stored_list.append(underlying_updated_list)
+                    else:
+                        _compare_n_patch_list(underlying_stored_list, underlying_updated_list)
+            else:
+                err_str = "updated_list's elements are not same datatypes as stored_list's elements"
+                logging.exception(err_str)
+                raise Exception(err_str)
+        elif isinstance(stored_list[0], dict):
+            # If elements are of dict type then checking if id key is present in elements
+            if stored_list[0].get("id") is not None:
+                stored_id_idx_dict: Dict = {stored_obj.get("id"): idx for idx, stored_obj in enumerate(stored_list)}
+                for index, update_dict in enumerate(updated_list):
+                    if isinstance(update_dict, dict):
+                        if (updated_id := update_dict.get("id")) is not None:
+                            # If id is new then appending update_dict to main list
+                            if updated_id not in stored_id_idx_dict:
+                                stored_list.append(update_dict)
+                            else:
+                                stored_index = stored_id_idx_dict[updated_id]
+                                # If update_dict only has id and the id is same as in stored_list - delete entry
+                                # Update list has id checked above + len == 1 confirms all it has is id
+                                if len(update_dict) == 1:
+                                    stored_list.remove(stored_list[stored_index])
+                                else:
+                                    # patch operation on dict in stored_list to update
+                                    stored_list[stored_index] = \
+                                        compare_n_patch_dict(stored_list[stored_index], update_dict)
+                        else:
+                            err_str = "updated_list's dict elements don't have id field but stored_list's elements do"
+                            logging.exception(err_str)
+                            raise Exception(err_str)
+                    else:
+                        err_str = "updated_list's elements are not same datatypes as stored_list's elements"
+                        logging.exception(err_str)
+                        raise Exception(err_str)
+                return stored_list
+            # If no id key found in dicts, since no way to compare just append any new updates to main list
+            else:
+                stored_list.extend(updated_list)
+                return stored_list
+        else:  # non container type list are just extended
+            stored_list.extend(updated_list)
+            return stored_list
+    else:
+        return updated_list
+
+
+def compare_n_patch_dict(stored_dict: Dict, updated_dict: Dict):
+    for key, updated_value in updated_dict.items():
+        if updated_value is not None:
+            stored_value = stored_dict[key]
+            if isinstance(stored_value, dict):
+                # dict value type is container, pass extracted (reference modified directly)
+                compare_n_patch_dict(stored_value, updated_value)
+            elif isinstance(stored_value, list):
+                # list value type is container, pass extracted (reference modified directly)
+                _compare_n_patch_list(stored_value, updated_value)
+            elif stored_value != updated_value:  # avoid unwarranted lookup(simple types)/construction(complex types)
+                # non container types are just assigned (+ no patch support: add/overwrite if set)
+                stored_dict[key] = updated_value
+            # else not required - old and new val are same
+    return stored_dict
