@@ -1,9 +1,8 @@
 import os
-import glob
 import logging
 import pickle
 import re
-from typing import List, Dict, Type, TypeVar, Callable
+from typing import List, Dict, TypeVar, Callable, Tuple
 import yaml
 from enum import IntEnum
 import json
@@ -122,7 +121,7 @@ def handle_http_response_extended(response: Response):
                 return response.status_code, content['messages']
             if 'detail' in content:
                 return response.status_code, content['detail']
-        except json.JSONDecodeError as e:
+        except json.JSONDecodeError:
             # handle as error
             if response.reason is not None:
                 content = response.reason
@@ -337,7 +336,7 @@ def configure_logger(level: str, log_file_dir_path: str | None = None, log_file_
         datetime_str: str = datetime.now().strftime("%Y%m%d.%H%M%S")
         os.rename(log_file_path, f"{log_file_path}.{datetime_str}")
 
-    with open(log_file_path, "w+") as fl:
+    with open(log_file_path, "w+"):
         pass
 
     if level is not None:
@@ -360,7 +359,7 @@ def configure_logger(level: str, log_file_dir_path: str | None = None, log_file_
             case "critical":
                 level = logging.CRITICAL
             case other:
-                error_msg: str = f"Unsupported logging level: {level}"
+                error_msg: str = f"Unsupported logging level: {other}"
                 raise Exception(error_msg)
     else:
         error_msg: str = f"logger level cant be none"
@@ -603,3 +602,10 @@ def compare_n_patch_dict(stored_dict: Dict, updated_dict: Dict):
                 stored_dict[key] = updated_value
             # else not required - old and new val are same
     return stored_dict
+
+
+def get_host_port_from_env(default_host: str = "127.0.0.1", default_port: int = 8020) -> Tuple[str, int]:
+    host_str: str = default_host if (host_env := os.getenv("HOST")) is None or len(host_env) == 0 else host_env
+    port_str: str = str(default_port) if (port_env := (os.getenv("PORT"))) is None or len(port_env) == 0 else port_env
+    int_port: int = int(port_str)
+    return host_str, int_port

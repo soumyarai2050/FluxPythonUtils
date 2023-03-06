@@ -85,8 +85,13 @@ class WSReader:
                     json_data = json.loads(json_str)
                     logging.debug(f"ws received json data: {json_data}")
                     if WSReader.ws_cont_list[idx].is_first:
-                        pydantic_obj_list = WSReader.ws_cont_list[idx].PydanticClassTypeList(__root__=json_data)
-                        for pydantic_obj in pydantic_obj_list.__root__:
+                        try:
+                            pydantic_obj_list = WSReader.ws_cont_list[idx].PydanticClassTypeList(__root__=json_data)
+                            for pydantic_obj in pydantic_obj_list.__root__:
+                                WSReader.ws_cont_list[idx].callback(pydantic_obj)
+                        except Exception as e:
+                            logging.error("first message is not-list, attempting direct object conversion instead")
+                            pydantic_obj = WSReader.ws_cont_list[idx].PydanticClassType(**json_data)
                             WSReader.ws_cont_list[idx].callback(pydantic_obj)
                         WSReader.ws_cont_list[idx].is_first = False
                     else:
