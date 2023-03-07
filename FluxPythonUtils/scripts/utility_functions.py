@@ -2,7 +2,7 @@ import os
 import logging
 import pickle
 import re
-from typing import List, Dict, TypeVar, Callable, Tuple
+from typing import List, Dict, TypeVar, Callable, Tuple, Optional
 import yaml
 from enum import IntEnum
 import json
@@ -14,6 +14,7 @@ from datetime import datetime
 # other packages
 from pydantic import BaseModel
 import pandas as pd
+from pymongo import MongoClient
 
 # FluxPythonUtils Modules
 from FluxPythonUtils.scripts.yaml_importer import YAMLImporter
@@ -584,7 +585,8 @@ def _compare_n_patch_list(stored_list: List, updated_list: List):
             stored_list.extend(updated_list)
             return stored_list
     else:
-        return updated_list
+        stored_list.extend(updated_list)
+        return stored_list
 
 
 def compare_n_patch_dict(stored_dict: Dict, updated_dict: Dict):
@@ -609,3 +611,20 @@ def get_host_port_from_env(default_host: str = "127.0.0.1", default_port: int = 
     port_str: str = str(default_port) if (port_env := (os.getenv("PORT"))) is None or len(port_env) == 0 else port_env
     int_port: int = int(port_str)
     return host_str, int_port
+
+
+def clear_mongo_database(mongo_server: str, database_name: str, ignore_collections: Optional[List[str]]):
+    client: Optional[MongoClient] = None
+    try:
+        client = MongoClient(mongo_server)
+        db = client.get_database(name=database_name)
+        collections: List[str] = db.list_collection_names()
+        for collection in collections:
+            if ignore_collections is not None and collection not in ignore_collections:
+                db[collection].drop()
+    except Exception as e:
+        err_str = f"clear_mongo_database failed, exception: {e}"
+        logging.exception(err_str)
+        raise e
+    finally:
+        client.close()

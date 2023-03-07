@@ -1,19 +1,16 @@
+import logging
 from abc import ABC, abstractmethod
 import re
 import subprocess
-from pathlib import PurePath
-from typing import Dict
+from typing import Dict, List, Optional
+from concurrent.futures import ThreadPoolExecutor
 
 
 class LogAnalyzer(ABC):
 
-    def __init__(self, log_file_path_and_name: str | None, debug_mode: bool = False):
-        # todo: if log_file_path_and_name in None then get it from environment variable.
-        if log_file_path_and_name is not None:
-            self.log_file_path_and_name = log_file_path_and_name
-        else:
-            self.log_file_path_and_name = PurePath(__file__) / "logs.log"
-
+    def __init__(self, log_files: Optional[List[str]], debug_mode: bool = False):
+        self.log_files: Optional[List[str]] = log_files
+        self.debug_mode: bool = debug_mode
         self.error_patterns = {
             'error': re.compile(r': ERROR :'),
             'critical': re.compile(r': CRITICAL :'),
@@ -24,7 +21,9 @@ class LogAnalyzer(ABC):
             'critical': 'Severity_CRITICAL',
             'warning': 'Severity_WARNING'
         }
-        if debug_mode:
+        if self.debug_mode:
+            logging.warning(f"Running log analyzer in DEBUG mode;;; log_files: {self.log_files}, "
+                            f"debug_mode: {self.debug_mode}")
             self.error_patterns.update({
                 'info': re.compile(r': INFO :'),
                 'debug': re.compile(r': DEBUG :')
@@ -33,12 +32,21 @@ class LogAnalyzer(ABC):
                 'info': 'Severity_INFO',
                 'debug': 'Severity_DEBUG'
             })
-        self.f = subprocess.Popen(['tail', '-F', self.log_file_path_and_name], stdout=subprocess.PIPE,
-                                  stderr=subprocess.PIPE)
 
-    def _analyze_log(self):
+        if self.log_files is None or len(self.log_files) == 0:
+            raise Exception(f"No log files provided for analysis;;; log_files: {self.log_files}")
+
+        with ThreadPoolExecutor(max_workers=len(self.log_files)) as exe:
+            exe.map(self._listen, self.log_files)
+
+    def _listen(self, log_file_name: str):
+        process: subprocess.Popen = subprocess.Popen(['tail', '-F', log_file_name], stdout=subprocess.PIPE,
+                                                     stderr=subprocess.PIPE)
+        self._analyze_log(process)
+
+    def _analyze_log(self, process: subprocess.Popen):
         while True:
-            line = self.f.stdout.readline().decode()
+            line = process.stdout.readline().decode()
             for error_type, pattern in self.error_patterns.items():
                 match = pattern.search(str(line))
                 if match:
