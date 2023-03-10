@@ -2,7 +2,7 @@ import os
 import logging
 import pickle
 import re
-from typing import List, Dict, TypeVar, Callable, Tuple, Optional
+from typing import List, Dict, TypeVar, Callable, Tuple
 import yaml
 from enum import IntEnum
 import json
@@ -58,7 +58,7 @@ def log_n_except(original_function):
             return result
         except Exception as e:
             err_str = f"Client Error Occurred in function: {original_function.__name__}, args: {args}, " \
-                      f"kwargs: {kwargs}, exception: {e}"
+                      f"kwargs: {kwargs};;;exception: {e}"
             logging.exception(err_str)
             raise Exception(err_str)
 
@@ -402,7 +402,7 @@ def load_yaml_configurations(config_file_path: str | None = None,
             return yaml_loader(default_config_file_path)
         else:
             err_str = f"No {default_config_file_path} exists in this script's directory. " \
-                      f"Either make one or pass another file's path as parameter"
+                      f"Either make one or pass another file's path as parameter;;;"
             logging.exception(err_str)
             raise Exception(err_str)
     else:
@@ -545,7 +545,7 @@ def _compare_n_patch_list(stored_list: List, updated_list: List):
                     else:
                         _compare_n_patch_list(underlying_stored_list, underlying_updated_list)
             else:
-                err_str = "updated_list's elements are not same datatypes as stored_list's elements"
+                err_str = "updated_list's elements are not same datatypes as stored_list's elements;;;"
                 logging.exception(err_str)
                 raise Exception(err_str)
         elif isinstance(stored_list[0], dict):
@@ -569,7 +569,7 @@ def _compare_n_patch_list(stored_list: List, updated_list: List):
                                     stored_list[stored_index] = \
                                         compare_n_patch_dict(stored_list[stored_index], update_dict)
                         else:
-                            err_str = "updated_list's dict elements don't have id field but stored_list's elements do"
+                            err_str = "updated_list's dict elements don't have id field but stored_list's elements do;;;"
                             logging.exception(err_str)
                             raise Exception(err_str)
                     else:
@@ -613,8 +613,8 @@ def get_host_port_from_env(default_host: str = "127.0.0.1", default_port: int = 
     return host_str, int_port
 
 
-def clear_mongo_database(mongo_server: str, database_name: str, ignore_collections: Optional[List[str]]):
-    client: Optional[MongoClient] = None
+def clear_mongo_database(mongo_server: str, database_name: str, ignore_collections: List[str] | None):
+    client: MongoClient | None = None
     try:
         client = MongoClient(mongo_server)
         db = client.get_database(name=database_name)
@@ -623,7 +623,7 @@ def clear_mongo_database(mongo_server: str, database_name: str, ignore_collectio
             if ignore_collections is not None and collection not in ignore_collections:
                 db[collection].drop()
     except Exception as e:
-        err_str = f"clear_mongo_database failed, exception: {e}"
+        err_str = f"clear_mongo_database failed for DB: {database_name};;;exception: {e}"
         logging.exception(err_str)
         raise e
     finally:

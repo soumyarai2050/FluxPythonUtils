@@ -2,14 +2,14 @@ import logging
 from abc import ABC, abstractmethod
 import re
 import subprocess
-from typing import Dict, List, Optional
+from typing import Dict, List
 from concurrent.futures import ThreadPoolExecutor
 
 
 class LogAnalyzer(ABC):
 
-    def __init__(self, log_files: Optional[List[str]], debug_mode: bool = False):
-        self.log_files: Optional[List[str]] = log_files
+    def __init__(self, log_files: List[str] | None, debug_mode: bool = False):
+        self.log_files: List[str] | None = log_files
         self.debug_mode: bool = debug_mode
         self.error_patterns = {
             'error': re.compile(r': ERROR :'),
