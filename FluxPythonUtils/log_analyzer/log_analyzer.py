@@ -4,6 +4,7 @@ import re
 import subprocess
 from typing import Dict, List
 from concurrent.futures import ThreadPoolExecutor
+from threading import Thread, current_thread
 
 
 class LogAnalyzer(ABC):
@@ -40,6 +41,8 @@ class LogAnalyzer(ABC):
             exe.map(self._listen, self.log_files)
 
     def _listen(self, log_file_name: str):
+        thread: Thread = current_thread()
+        thread.name = log_file_name
         process: subprocess.Popen = subprocess.Popen(['tail', '-F', log_file_name], stdout=subprocess.PIPE,
                                                      stderr=subprocess.PIPE)
         self._analyze_log(process)
@@ -47,6 +50,9 @@ class LogAnalyzer(ABC):
     def _analyze_log(self, process: subprocess.Popen):
         while True:
             line = process.stdout.readline().decode()
+            # ignore processing the log line that ends with "---"
+            if line.strip().endswith("---"):
+                continue
             for error_type, pattern in self.error_patterns.items():
                 match = pattern.search(str(line))
                 if match:
@@ -72,8 +78,16 @@ class LogAnalyzer(ABC):
         else:
             alert_brief = error_dict["line"]
             alert_details = ""
+        alert_brief = self._truncate_str(alert_brief)
+        alert_details = self._truncate_str(alert_details)
         severity = self._get_severity(error_dict["type"])
         self._send_alerts(severity, alert_brief.strip(), alert_details.strip())
+
+    def _truncate_str(self, text: str, max_size_in_bytes: int = 2048) -> str:
+        if len(text.encode("utf-8")) > max_size_in_bytes:
+            text = text.encode("utf-8")[:max_size_in_bytes].decode()
+            text += f"...check the file: {current_thread().name} to see the entire log"
+        return text
 
     @abstractmethod
     def _send_alerts(self, severity: str, alert_brief: str, alert_details: str):

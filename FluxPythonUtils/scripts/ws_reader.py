@@ -53,6 +53,7 @@ class WSReader:
         pending_tasks = list()
         json_str = "{\"Done\": 1}"
         for idx, ws_cont in enumerate(WSReader.ws_cont_list):
+            # default 10MB pass max_size=value to connect and increase / decrease the default size, eg. max_size=4**20
             ws_cont.ws = await websockets.connect(ws_cont.uri, ping_timeout=None)
             task = asyncio.create_task(ws_cont.ws.recv(), name=str(idx))
             pending_tasks.append(task)
@@ -83,7 +84,7 @@ class WSReader:
                 json_str = data_found_task.result()
                 if json_str is not None:
                     json_data = json.loads(json_str)
-                    logging.debug(f"ws received json data: {json_data}")
+                    # logging.debug(f"ws received json data;;;{json_data}---")
                     if WSReader.ws_cont_list[idx].is_first:
                         try:
                             pydantic_obj_list = WSReader.ws_cont_list[idx].PydanticClassTypeList(__root__=json_data)
