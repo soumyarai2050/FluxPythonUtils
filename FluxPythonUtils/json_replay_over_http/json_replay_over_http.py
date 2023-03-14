@@ -5,11 +5,10 @@ import json
 from json import JSONDecodeError
 import os
 from typing import Dict
-from FluxPythonUtils.scripts.utility_functions import configure_logger
 
 
 class JSONReplayOverHTTP:
-    def _init_(self, url: str, json_dir: str, replay_date: str):
+    def __init__(self, url: str, json_dir: str, replay_date: str):
         self.url: str = url
         self.json_dir: str = json_dir
         self.replay_date: str = replay_date
@@ -17,9 +16,9 @@ class JSONReplayOverHTTP:
 
     def replay_messages(self) -> None:
         try:
-            datetime.strptime(self.replay_date, "Y-%m-%d")
+            datetime.strptime(self.replay_date, "%Y-%m-%d")
         except ValueError as e:
-            logging.error(f"Invalid replay_date format. Expected format is YVY-MM-DD, found: {self.replay_date}")
+            logging.error(f"Invalid replay_date format. Expected format is YYYY-MM-DD, found: {self.replay_date}")
             raise e
 
         if not os.path.exists(self.json_dir):
