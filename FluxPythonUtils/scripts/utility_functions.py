@@ -613,18 +613,49 @@ def get_host_port_from_env(default_host: str = "127.0.0.1", default_port: int = 
     return host_str, int_port
 
 
-def clear_mongo_database(mongo_server: str, database_name: str, ignore_collections: List[str] | None):
+def db_collections(mongo_server: str, database_name: str, ignore_collections: List[str] | None = None):
+    """
+    Generator to get collection instance from mongodb (ignores collections present in ignore_collections list)
+    :param mongo_server:
+    :param database_name: Name of db
+    :param ignore_collections: name of collections to be ignored
+    :return: collections instance
+    """
     client: MongoClient | None = None
     try:
         client = MongoClient(mongo_server)
         db = client.get_database(name=database_name)
         collections: List[str] = db.list_collection_names()
         for collection in collections:
-            if ignore_collections is not None and collection not in ignore_collections:
-                db[collection].drop()
+            if collection not in ignore_collections:
+                yield db[collection]
     except Exception as e:
-        err_str = f"clear_mongo_database failed for DB: {database_name};;;exception: {e}"
+        err_str = f"drop_mongo_collections failed for DB: {database_name};;;exception: {e}"
         logging.exception(err_str)
         raise e
     finally:
         client.close()
+
+
+def drop_mongo_collections(mongo_server: str, database_name: str, ignore_collections: List[str] | None = None) -> None:
+    """
+    Drops all collections present in collections except ``ignore_collections``
+    :param mongo_server: Mongo Server that requires Cleaning
+    :param database_name: Name of db
+    :param ignore_collections: name of collections to be ignored from getting dropped
+    :return: None
+    """
+    for collection in db_collections(mongo_server, database_name, ignore_collections):
+        collection.drop()
+
+
+def clean_mongo_collections(mongo_server: str, database_name: str, ignore_collections: List[str] | None = None) -> None:
+    """
+    Cleans all collections (deletes all documents) present in collections except ``ignore_collections``
+    :param mongo_server: Mongo Server that requires Cleaning
+    :param database_name: Name of db
+    :param ignore_collections: name of collections to be ignored from getting cleaned
+    :return: None
+    """
+    for collection in db_collections(mongo_server, database_name, ignore_collections):
+        collection.delete_many({})
