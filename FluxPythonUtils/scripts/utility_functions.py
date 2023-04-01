@@ -396,7 +396,7 @@ def yaml_loader(file_path: str):
 
 
 def load_yaml_configurations(config_file_path: str | None = None,
-                             default_config_file_path: str | None = "configurations.yaml"):
+                             default_config_file_path: str | None = "configurations.yaml") -> Dict:
     if config_file_path is None:
         if file_exist(default_config_file_path):
             return yaml_loader(default_config_file_path)

@@ -1,16 +1,20 @@
 import logging
+import sys
 from abc import ABC, abstractmethod
 import re
 import subprocess
 from typing import Dict, List
 from concurrent.futures import ThreadPoolExecutor
 from threading import Thread, current_thread
+import signal
 
 
 class LogAnalyzer(ABC):
 
     def __init__(self, log_files: List[str] | None, debug_mode: bool = False):
         self.log_files: List[str] | None = log_files
+        self.process_list: List[subprocess.Popen] = []
+        self.run_mode: bool = True
         self.debug_mode: bool = debug_mode
         self.error_patterns = {
             'error': re.compile(r': ERROR :'),
@@ -37,22 +41,46 @@ class LogAnalyzer(ABC):
         if self.log_files is None or len(self.log_files) == 0:
             raise Exception(f"No log files provided for analysis;;; log_files: {self.log_files}")
 
+        signal.signal(signal.SIGTERM, self._signal_handler)
+
         with ThreadPoolExecutor(max_workers=len(self.log_files)) as exe:
             exe.map(self._listen, self.log_files)
+
+    def _signal_handler(self, *args):
+        logging.warning("SIGTERM received. Gracefully terminating all subprocess.")
+        for process in self.process_list:
+            process.kill()
+        self.process_list.clear()
+        logging.info("Setting run_mode to False")
+        self.run_mode = False
+        sys.exit(0)
 
     def _listen(self, log_file_name: str):
         thread: Thread = current_thread()
         thread.name = log_file_name
         process: subprocess.Popen = subprocess.Popen(['tail', '-F', log_file_name], stdout=subprocess.PIPE,
                                                      stderr=subprocess.PIPE)
+        self.process_list.append(process)
         self._analyze_log(process)
 
     def _analyze_log(self, process: subprocess.Popen):
-        while True:
+        while self.run_mode:
             line = process.stdout.readline().decode()
+            if not line or not line.strip().replace("\n", ""):
+                continue
+            line = line.strip()
             # ignore processing the log line that ends with "---"
             if line.strip().endswith("---"):
                 continue
+
+            log_message = self._remove_log_prefix(log_line=line)
+            if log_message.startswith("$$$"):
+                # handle trade simulator message
+                logging.info(f"Trade simulator message: {log_message}")
+                self._process_trade_simulator_message(log_message)
+                continue
+
+            logging.debug(f"Processing log line: {line[:100]}...")
             for error_type, pattern in self.error_patterns.items():
                 match = pattern.search(str(line))
                 if match:
@@ -60,8 +88,10 @@ class LogAnalyzer(ABC):
                         'type': error_type,
                         'line': line.strip()
                     }
+                    logging.info(f"Error pattern matched, creating alert. error_dict: {error_dict}")
                     self._create_alert(error_dict)
-                # else not required: if pattern doesn't match no need to append error
+                    break
+                # else not required: if pattern doesn't match, no need to append error
 
     def _get_severity(self, error_type: str) -> str:
         error_type = error_type.lower()
@@ -89,8 +119,19 @@ class LogAnalyzer(ABC):
             text += f"...check the file: {current_thread().name} to see the entire log"
         return text
 
+    def _remove_log_prefix(self, log_line: str):
+        if log_line is not None:
+            return log_line.split(":", maxsplit=6)[-1].strip()
+        return log_line
+
     @abstractmethod
     def _send_alerts(self, severity: str, alert_brief: str, alert_details: str):
         """
         derived to override with its alert API implementation
+        """
+
+    @abstractmethod
+    def _process_trade_simulator_message(self, message):
+        """
+        derived class to override with the implementation of processing of trade simulation message
         """
