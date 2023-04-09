@@ -396,10 +396,15 @@ def yaml_loader(file_path: str):
 
 
 def load_yaml_configurations(config_file_path: str | None = None,
-                             default_config_file_path: str | None = "configurations.yaml") -> Dict:
+                             default_config_file_path: str | None = "configurations.yaml",
+                             load_as_str: bool = False) -> Dict | str:
     if config_file_path is None:
         if file_exist(default_config_file_path):
-            return yaml_loader(default_config_file_path)
+            if not load_as_str:
+                return yaml_loader(default_config_file_path)
+            else:
+                with open(default_config_file_path) as f:
+                    return f.read()
         else:
             err_str = f"No {default_config_file_path} exists in this script's directory. " \
                       f"Either make one or pass another file's path as parameter;;;"
@@ -407,7 +412,43 @@ def load_yaml_configurations(config_file_path: str | None = None,
             raise Exception(err_str)
     else:
         if file_exist(config_file_path):
-            return yaml_loader(config_file_path)
+            if not load_as_str:
+                return yaml_loader(config_file_path)
+            else:
+                with open(config_file_path) as f:
+                    return f.read()
+        else:
+            err_str = f"No file: {config_file_path} exist"
+            logging.exception(err_str)
+            raise Exception(err_str)
+
+
+def update_yaml_configurations(yaml_content: Dict | str, config_file_path: str | None = None,
+                               default_config_file_path: str | None = "configurations.yaml") -> None:
+    if isinstance(yaml_content, Dict):
+        is_dict = True
+    else:
+        is_dict = False
+
+    if config_file_path is None:
+        if file_exist(default_config_file_path):
+            with open(default_config_file_path, "w") as f:
+                if is_dict:
+                    yaml.dump(yaml_content, f)
+                else:
+                    f.write(yaml_content)
+        else:
+            err_str = f"No {default_config_file_path} exists in this script's directory. " \
+                      f"Either make one or pass another file's path as parameter;;;"
+            logging.exception(err_str)
+            raise Exception(err_str)
+    else:
+        if file_exist(config_file_path):
+            with open(config_file_path, "w") as f:
+                if is_dict:
+                    yaml.dump(yaml_content, f)
+                else:
+                    f.write(yaml_content)
         else:
             err_str = f"No file: {config_file_path} exist"
             logging.exception(err_str)
@@ -564,6 +605,8 @@ def _compare_n_patch_list(stored_list: List, updated_list: List):
                                 # Update list has id checked above + len == 1 confirms all it has is id
                                 if len(update_dict) == 1:
                                     stored_list.remove(stored_list[stored_index])
+                                    stored_id_idx_dict = \
+                                        {stored_obj.get("id"): idx for idx, stored_obj in enumerate(stored_list)}
                                 else:
                                     # patch operation on dict in stored_list to update
                                     stored_list[stored_index] = \
