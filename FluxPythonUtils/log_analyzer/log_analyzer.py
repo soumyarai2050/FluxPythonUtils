@@ -23,7 +23,7 @@ class LogDetail(BaseModel):
 class LogAnalyzer(ABC):
 
     def __init__(self, regex_file: str, log_details: List[LogDetail] | None, simulation_mode: bool = False,
-                 debug_mode: bool = False,):
+                 debug_mode: bool = False):
         self.regex_file: str = regex_file
         self.regex_file_lock: Lock = Lock()
         self.regex_file_data_snapshot_version: float | None = None
@@ -35,8 +35,8 @@ class LogAnalyzer(ABC):
         self.debug_mode: bool = debug_mode
         self.signal_handler_lock: Lock = Lock()
         self.log_refresh_threshold: int = 60
-        self.log_prefix_regex_pattern = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} : (" \
-                                        r"DEBUG|INFO|WARNING|ERROR|CRITICAL) : \[[a-zA-z.]* : \d*] : "
+        self.log_prefix_regex_pattern: str = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} : (" \
+                                             r"DEBUG|INFO|WARNING|ERROR|CRITICAL) : \[[a-zA-Z._]* : \d*] : "
         self.error_patterns: Dict[str, re.Pattern] = {
             "error": re.compile(r"ERROR"),
             "critical": re.compile(r"CRITICAL"),
@@ -62,9 +62,7 @@ class LogAnalyzer(ABC):
         if self.simulation_mode:
             print("CRITICAL: log analyzer running in simulation mode...")
             alert_brief: str = "Log analyzer running in simulation mode"
-            alert_details: str = ""
-            self._send_alerts(severity=self._get_severity("critical"), alert_brief=alert_brief,
-                              alert_details=alert_details)
+            self._send_alerts(severity=self._get_severity("critical"), alert_brief=alert_brief, alert_details="")
 
         if self.log_details is None or len(self.log_details) == 0:
             raise Exception(f"No log files provided for analysis;;; log_details: {self.log_details}")
@@ -140,7 +138,7 @@ class LogAnalyzer(ABC):
         while self.run_mode:
             try:
                 # if critical service, periodically check if new logs are generated. if no new logs are
-                # generated send an alert
+                # generated, send an alert
                 if log_detail.critical:
                     if (DateTime.utcnow() - last_update_date_time).seconds > self.log_refresh_threshold:
                         alert_brief: str = f"No new logs found for {log_detail.service} for last " \
@@ -161,14 +159,14 @@ class LogAnalyzer(ABC):
                 else:
                     continue
 
-                # ignore log line not matching log_prefix_regex_pattern
+                last_update_date_time = DateTime.utcnow()
+                # ignore processing log line that not matches log_prefix_regex_pattern
                 if not re.compile(log_detail.log_prefix_regex_pattern).search(line):
                     continue
 
                 if self.refresh_regex_list():
                     logging.info(f"suppress alert regex list updated. regex_list: {self.regex_list}")
 
-                last_update_date_time = DateTime.utcnow()
                 log_prefix, log_message = \
                     self._get_log_prefix_n_message(log_line=line,
                                                    log_prefix_pattern=log_detail.log_prefix_regex_pattern)
@@ -188,7 +186,7 @@ class LogAnalyzer(ABC):
                     self._process_trade_simulator_message(log_message)
                     continue
 
-                logging.debug(f"Processing log line: {line[:200]}...")
+                logging.debug(f"Processing log line: {log_message[:200]}...")
                 for error_type, pattern in self.error_patterns.items():
                     match = pattern.search(log_prefix)
                     if match:
