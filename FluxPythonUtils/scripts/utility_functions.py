@@ -152,7 +152,8 @@ def dict_or_list_records_csv_writer(file_name: str, records: Dict | List, fieldn
         writer.writeheader()
         if isinstance(records, Dict):
             for record in records.values():
-                writer.writerow(json.loads(record_type(**record.dict()).json()))
+                json_dict = json.loads(record_type(**record.dict()).json())
+                writer.writerow(json_dict)
         elif isinstance(records, List):
             for record in records:
                 writer.writerow(json.loads(record_type(**record.dict()).json()))

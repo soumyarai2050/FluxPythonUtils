@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+import time
 from abc import ABC, abstractmethod
 import re
 import subprocess
@@ -74,7 +75,8 @@ class LogAnalyzer(ABC):
             results = exe.map(self._listen, self.log_details)
 
         for res in results:
-            logging.error(res)
+            if res is not None:
+                logging.error(res)
 
     def _load_regex_list(self) -> None:
         if os.path.exists(self.regex_file):
@@ -133,6 +135,17 @@ class LogAnalyzer(ABC):
         self.process_list.append(process)
         self._analyze_log(process, poll, log_detail, last_update_date_time)
 
+    def _reconnect_process(self, process: subprocess.Popen, log_detail: LogDetail) -> List:
+        process.kill()
+        self.process_list.remove(process)
+        process: subprocess.Popen = subprocess.Popen(['tail', '-F', log_detail.log_file], stdout=subprocess.PIPE,
+                                                     stderr=subprocess.STDOUT)
+        # add poll for process stdout for non-blocking tail of log file
+        poll: select.poll = select.poll()
+        poll.register(process.stdout)
+        self.process_list.append(process)
+        return [process, poll]
+
     def _analyze_log(self, process: subprocess.Popen, poll: select.poll, log_detail: LogDetail,
                      last_update_date_time: DateTime) -> None:
         while self.run_mode:
@@ -157,6 +170,18 @@ class LogAnalyzer(ABC):
                     if not line:
                         continue
                 else:
+                    time.sleep(0.5)
+                    continue
+
+                if line.startswith("tail"):
+                    logging.warning(line)
+
+                if "tail:" in line and "giving up on this name" in line:
+                    alert_brief: str = f"tail error encountered in log service: {log_detail.service}, restarting..."
+                    logging.critical(f"{alert_brief};;;{line}")
+                    self._send_alerts(severity=self._get_severity("warning"), alert_brief=alert_brief,
+                                      alert_details=line)
+                    process, poll = self._reconnect_process(process=process, log_detail=log_detail)
                     continue
 
                 last_update_date_time = DateTime.utcnow()
@@ -186,23 +211,37 @@ class LogAnalyzer(ABC):
                     self._process_trade_simulator_message(log_message)
                     continue
 
+                if re.compile(r"%%.*%%").search(log_message):
+                    # handle strat alert message
+                    logging.info(f"Strat alert message: {log_message}")
+                    self._process_strat_alert_message(log_prefix, log_message)
+                    continue
+
                 logging.debug(f"Processing log line: {log_message[:200]}...")
-                for error_type, pattern in self.error_patterns.items():
-                    match = pattern.search(log_prefix)
-                    if match:
-                        error_dict: Dict = {
-                            'type': error_type,
-                            'line': log_prefix.replace(pattern.search(log_prefix)[0], " ") + log_message
-                        }
-                        logging.info(f"Error pattern matched, creating alert. error_dict: {error_dict}")
-                        self._create_alert(error_dict)
-                        break
-                    # else not required: if pattern doesn't match, no need to append error
+                error_dict: Dict[str, str] | None = self._get_error_dict(error_patterns=self.error_patterns,
+                                                                         log_prefix=log_prefix, log_message=log_message)
+                if error_dict is not None:
+                    severity, alert_brief, alert_details = self._create_alert(error_dict)
+                    self._send_alerts(severity=severity, alert_brief=alert_brief, alert_details=alert_details)
+                # else not required: error pattern doesn't match, no alerts to send
             except Exception as e:
                 logging.exception(f"_analyze_log failed;;; exception: {e}")
                 with self.signal_handler_lock:
                     if self.run_mode:
                         self._signal_handler(signal.Signals.SIGTERM)
+
+    def _get_error_dict(self, error_patterns: Dict[str, re.Pattern], log_prefix: str, log_message: str) -> \
+            Dict[str, str] | None:
+        for error_type, pattern in self.error_patterns.items():
+            match = pattern.search(log_prefix)
+            if match:
+                error_dict: Dict = {
+                    'type': error_type,
+                    'line': log_prefix.replace(pattern.search(log_prefix)[0], " ") + log_message
+                }
+                logging.info(f"Error pattern matched, creating alert. error_dict: {error_dict}")
+                return error_dict
+        return None
 
     def _get_severity(self, error_type: str) -> str:
         error_type = error_type.lower()
@@ -211,7 +250,7 @@ class LogAnalyzer(ABC):
         else:
             return 'Severity_UNKNOWN'
 
-    def _create_alert(self, error_dict: Dict) -> None:
+    def _create_alert(self, error_dict: Dict) -> List[str]:
         alert_brief_n_detail_lists: List[str] = error_dict["line"].split(";;;", 1)
         if len(alert_brief_n_detail_lists) == 2:
             alert_brief = alert_brief_n_detail_lists[0]
@@ -219,10 +258,10 @@ class LogAnalyzer(ABC):
         else:
             alert_brief = alert_brief_n_detail_lists[0]
             alert_details = ". ".join(alert_brief_n_detail_lists[1:])
-        alert_brief = self._truncate_str(alert_brief)
-        alert_details = self._truncate_str(alert_details)
+        alert_brief = self._truncate_str(alert_brief).strip()
+        alert_details = self._truncate_str(alert_details).strip()
         severity = self._get_severity(error_dict["type"])
-        self._send_alerts(severity, alert_brief.strip(), alert_details.strip())
+        return [severity, alert_brief, alert_details]
 
     def _truncate_str(self, text: str, max_size_in_bytes: int = 2048) -> str:
         if len(text.encode("utf-8")) > max_size_in_bytes:
@@ -244,7 +283,13 @@ class LogAnalyzer(ABC):
         """
 
     @abstractmethod
-    def _process_trade_simulator_message(self, message) -> None:
+    def _process_trade_simulator_message(self, message: str) -> None:
         """
         derived class to override with the implementation of processing of trade simulation message
+        """
+
+    @abstractmethod
+    def _process_strat_alert_message(self, prefix: str, message: str) -> None:
+        """
+        derived class to override with the implementation of processing of strat alert message
         """
