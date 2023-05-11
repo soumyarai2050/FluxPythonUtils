@@ -126,6 +126,9 @@ class LogAnalyzer(ABC):
         if log_detail.log_prefix_regex_pattern is None:
             log_detail.log_prefix_regex_pattern = self.log_prefix_regex_pattern
         setattr(thread, "service_detail", log_detail)
+        if not os.path.exists(log_detail.log_file):
+            with open(log_detail.log_file, "w+"):
+                pass
         process: subprocess.Popen = subprocess.Popen(['tail', '-F', log_detail.log_file], stdout=subprocess.PIPE,
                                                      stderr=subprocess.STDOUT)
         # add poll for process stdout for non-blocking tail of log file

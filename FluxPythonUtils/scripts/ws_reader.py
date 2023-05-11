@@ -132,7 +132,8 @@ class WSReader:
         pending_tasks = list()
         json_str = "{\"Done\": 1}"
         for idx, ws_cont in enumerate(WSReader.ws_cont_list):
-            # default max buffer size is: 10MB, pas for eg: max_size=2**24 to change the limit to 16 MB
+            # default max buffer size is: 10MB, pass max_size=value to connect and increase / decrease the default
+            # size, for eg: max_size=2**24 to change the limit to 16 MB
             ws_cont.ws = await websockets.connect(ws_cont.uri, ping_timeout=None, max_size=2**24)
             task = asyncio.create_task(ws_cont.ws.recv(), name=str(idx))
             pending_tasks.append(task)

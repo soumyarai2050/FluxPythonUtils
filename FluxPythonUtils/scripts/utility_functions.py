@@ -1,3 +1,4 @@
+# Standard imports
 import os
 import logging
 import pickle
@@ -10,8 +11,9 @@ from pathlib import PurePath, Path
 import csv
 from requests import Response
 from datetime import datetime
+import timeit
 
-# other packages
+# 3rd party packages
 from pydantic import BaseModel
 import pandas as pd
 from pymongo import MongoClient
@@ -57,8 +59,8 @@ def log_n_except(original_function):
             result = original_function(*args, **kwargs)
             return result
         except Exception as e:
-            err_str = f"Client Error Occurred in function: {original_function.__name__}, args: {args}, " \
-                      f"kwargs: {kwargs};;;exception: {e}"
+            err_str = f"Client Error Occurred in function: {original_function.__name__};;;args: {args}, " \
+                      f"kwargs: {kwargs}, exception: {e}"
             logging.exception(err_str)
             raise Exception(err_str)
 
@@ -657,17 +659,17 @@ def get_host_port_from_env(default_host: str = "127.0.0.1", default_port: int = 
     return host_str, int_port
 
 
-def db_collections(mongo_server: str, database_name: str, ignore_collections: List[str] | None = None):
+def db_collections(mongo_server_uri: str, database_name: str, ignore_collections: List[str] | None = None):
     """
     Generator to get collection instance from mongodb (ignores collections present in ignore_collections list)
-    :param mongo_server:
+    :param mongo_server_uri:
     :param database_name: Name of db
     :param ignore_collections: name of collections to be ignored
     :return: collections instance
     """
     client: MongoClient | None = None
     try:
-        client = MongoClient(mongo_server)
+        client = MongoClient(mongo_server_uri)
         db = client.get_database(name=database_name)
         collections: List[str] = db.list_collection_names()
         for collection in collections:
@@ -681,25 +683,42 @@ def db_collections(mongo_server: str, database_name: str, ignore_collections: Li
         client.close()
 
 
-def drop_mongo_collections(mongo_server: str, database_name: str, ignore_collections: List[str] | None = None) -> None:
+def drop_mongo_collections(mongo_server_uri: str, database_name: str, ignore_collections: List[str] | None = None) -> None:
     """
     Drops all collections present in collections except ``ignore_collections``
-    :param mongo_server: Mongo Server that requires Cleaning
+    :param mongo_server_uri: Mongo Server that requires Cleaning
     :param database_name: Name of db
     :param ignore_collections: name of collections to be ignored from getting dropped
     :return: None
     """
-    for collection in db_collections(mongo_server, database_name, ignore_collections):
+    for collection in db_collections(mongo_server_uri, database_name, ignore_collections):
         collection.drop()
 
 
-def clean_mongo_collections(mongo_server: str, database_name: str, ignore_collections: List[str] | None = None) -> None:
+def clean_mongo_collections(mongo_server_uri: str, database_name: str, ignore_collections: List[str] | None = None) -> None:
     """
     Cleans all collections (deletes all documents) present in collections except ``ignore_collections``
-    :param mongo_server: Mongo Server that requires Cleaning
+    :param mongo_server_uri: Mongo Server that requires Cleaning
     :param database_name: Name of db
     :param ignore_collections: name of collections to be ignored from getting cleaned
     :return: None
     """
-    for collection in db_collections(mongo_server, database_name, ignore_collections):
+    for collection in db_collections(mongo_server_uri, database_name, ignore_collections):
         collection.delete_many({})
+
+
+def get_version_from_mongodb_uri(mongo_server_uri: str) -> str:
+    client = MongoClient(mongo_server_uri)
+    return client.server_info().get("version")
+
+
+# Decorator Function
+def perf_benchmark(func_callable):
+    def benchmarker(*args, **kwargs):
+        start_time = timeit.default_timer()
+        return_val = func_callable(*args, **kwargs)
+        end_time = timeit.default_timer()
+        delta = end_time - start_time
+        logging.debug(f"Callable {func_callable.__name__} took {delta} secs to complete")
+        return return_val
+    return benchmarker
