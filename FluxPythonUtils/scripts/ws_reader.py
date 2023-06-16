@@ -5,7 +5,6 @@ from typing import Type, Callable, ClassVar, List
 import websockets
 from websockets.exceptions import ConnectionClosedOK, ConnectionClosedError, ConnectionClosed
 import asyncio
-from asyncio.exceptions import TimeoutError
 import json
 import logging
 from threading import RLock
@@ -40,7 +39,7 @@ class WSReader:
         # ideally 20 instead of 2 : allows for timeout to notice shutdown is triggered and thread to teardown
         time.sleep(2)
 
-    ws_cont_list: ClassVar[List] = list()
+    ws_cont_list: ClassVar[List['WSReader']] = list()
 
     # callable accepts List of PydanticClassType or None; None implies WS connection closed
     def __init__(self, uri: str, PydanticClassType: Type, PydanticClassTypeList: Type, callback: Callable,
@@ -53,6 +52,7 @@ class WSReader:
         self.is_first = True
         self.single_obj_lock = RLock()
         self.notify = notify
+        self.force_disconnected = False
         WSReader.ws_cont_list.append(self)
 
     @staticmethod
@@ -125,72 +125,94 @@ class WSReader:
                                   f";;;Json data: {json_data}")
 
     # handle connection and communication with the server
+    # TODO BUF FIX: current implementation would lose connection permanently if server is restarted forcing meed for
+    #  client restart. The fix is to move websockets.connect in a periodic task and here we just mark the ws_cont
+    #  disconnected
     @staticmethod
     async def ws_client():
         # Connect to the server (don't send timeout=None to prod, used for debug only)
-        ws_list = list()
         pending_tasks = list()
         json_str = "{\"Done\": 1}"
         for idx, ws_cont in enumerate(WSReader.ws_cont_list):
             # default max buffer size is: 10MB, pass max_size=value to connect and increase / decrease the default
             # size, for eg: max_size=2**24 to change the limit to 16 MB
-            ws_cont.ws = await websockets.connect(ws_cont.uri, ping_timeout=None, max_size=2**24)
-            task = asyncio.create_task(ws_cont.ws.recv(), name=str(idx))
-            pending_tasks.append(task)
-        while not WSReader.shutdown:
+            try:
+                ws_cont.ws = await websockets.connect(ws_cont.uri, ping_timeout=None, max_size=2 ** 24)
+                task = asyncio.create_task(ws_cont.ws.recv(), name=str(idx))
+                pending_tasks.append(task)
+            except Exception as e:
+                logging.error(f"ws_client error while connecting/async task submission ws_cont: {ws_cont}, "
+                              f"exception: {e}")
+        ws_remove_set = set()
+        while len(pending_tasks):
             try:
                 # wait doesn't raise TimeoutError! Futures that aren't done when timeout occurs are returned in 2nd set
                 # make timeout configurable with default 2 in debug explicitly keep 20++ by configuring it such ?
-                data_found_tasks, pending_tasks = await asyncio.wait(pending_tasks, return_when=asyncio.FIRST_COMPLETED,
-                                                                     timeout=20.0)
+                completed_tasks, pending_tasks = await asyncio.wait(pending_tasks, return_when=asyncio.FIRST_COMPLETED,
+                                                                    timeout=20.0)
             except Exception as e:
                 logging.error(f"await asyncio.wait raised exception: {e}")
-                continue
+                if not WSReader.shutdown:
+                    continue
+                else:
+                    break  # here we don't close any web-socket on purpose - as we can't be sure of the exception reason
+            ws_remove_set.clear()
+            while completed_tasks:
+                if WSReader.shutdown:
+                    for task in pending_tasks:
+                        idx = int(task.get_name())
+                        logging.debug(f"closing web socket connection gracefully within while loop for idx {idx};;;"
+                                      f"ws_cont: {WSReader.ws_cont_list[idx]}")
+                        WSReader.ws_cont_list[idx].ws.disconnect()
+                        break
 
-            while data_found_tasks:
                 data_found_task = None
                 try:
-                    data_found_task = data_found_tasks.pop()
-                except TimeoutError as t:  # this ideally should never hit based on documentation
-                    logging.debug(f'timeout: {t}')
-                    continue
+                    data_found_task = completed_tasks.pop()
                 except ConnectionClosedOK as e:
                     idx = int(data_found_task.get_name())
                     logging.debug('\n', f"web socket connection closed gracefully within while loop for idx {idx};;;"
                                         f" Exception: {e}")
-                    ws_list.remove(WSReader.ws_cont_list[idx].ws)
-                    continue
+                    ws_remove_set.add(idx)
                 except ConnectionClosedError as e:
                     idx = int(data_found_task.get_name())
                     logging.error('\n', f"web socket connection closed with error within while loop for idx {idx};;;"
                                         f" Exception: {e}")
-                    ws_list.remove(WSReader.ws_cont_list[idx].ws)
-                    continue
+                    ws_remove_set.add(idx)
                 except ConnectionClosed as e:
                     idx = int(data_found_task.get_name())
                     logging.debug('\n', f"web socket connection closed within while loop for idx  {idx}"
                                         f"{data_found_task.get_name()};;; Exception: {e}")
-                    ws_list.remove(WSReader.ws_cont_list[idx].ws)
-                    continue
+                    ws_remove_set.add(idx)
                 except Exception as e:
                     idx = int(data_found_task.get_name())
                     logging.debug('\n', f"web socket future returned exception within while loop for idx  {idx}"
                                         f"{data_found_task.get_name()};;; Exception: {e}")
                     # should we remove this ws - maybe this is an intermittent error, improve handling case by case
-                    ws_list.remove(WSReader.ws_cont_list[idx].ws)
-                    continue
+                    ws_remove_set.add(idx)
 
                 idx = int(data_found_task.get_name())
-                recreated_task = asyncio.create_task(WSReader.ws_cont_list[idx].ws.recv(), name=str(idx))
-                pending_tasks.add(recreated_task)
+
+                if ws_remove_set and idx in ws_remove_set:
+                    logging.error(f"dropping {WSReader.ws_cont_list[idx]} - found in ws_remove_set")
+                    # TODO important add bug fix for server side restart driven reconnect logic by using
+                    #  force_disconnected
+                    WSReader.ws_cont_list[idx].force_disconnected = True
+                    continue
+
                 json_str = data_found_task.result()
                 if json_str is not None:
-                    if len(json_str) > (2**20):
-                        logging.warning(f"> 1 MB json_str detected, size: {len(json_str)} in ws recv;;;json_str: {json_str}")
+                    recreated_task = asyncio.create_task(WSReader.ws_cont_list[idx].ws.recv(), name=str(idx))
+                    pending_tasks.add(recreated_task)
+                    if len(json_str) > (2 ** 20):
+                        logging.warning(
+                            f"> 1 MB json_str detected, size: {len(json_str)} in ws recv;;;json_str: {json_str}")
                     WSReader.handle_json_str(json_str, WSReader.ws_cont_list[idx])
                     json_str = None
                     json_data = None
-        for ws in ws_list:
-            ws.disconnect()
+                else:
+                    logging.error(f"dropping {WSReader.ws_cont_list[idx]} - json_str found None")
+                    WSReader.ws_cont_list[idx].ws.disconnect()
+                    WSReader.ws_cont_list[idx].force_disconnected = True
+                    continue
         logging.warning("Executor instance going down")
-

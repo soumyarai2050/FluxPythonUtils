@@ -594,11 +594,11 @@ def _compare_n_patch_list(stored_list: List, updated_list: List):
                 raise Exception(err_str)
         elif isinstance(stored_list[0], dict):
             # If elements are of dict type then checking if id key is present in elements
-            if stored_list[0].get("id") is not None:
-                stored_id_idx_dict: Dict = {stored_obj.get("id"): idx for idx, stored_obj in enumerate(stored_list)}
+            if stored_list[0].get("_id") is not None:
+                stored_id_idx_dict: Dict = {stored_obj.get("_id"): idx for idx, stored_obj in enumerate(stored_list)}
                 for index, update_dict in enumerate(updated_list):
                     if isinstance(update_dict, dict):
-                        if (updated_id := update_dict.get("id")) is not None:
+                        if (updated_id := update_dict.get("_id")) is not None:
                             # If id is new then appending update_dict to main list
                             if updated_id not in stored_id_idx_dict:
                                 stored_list.append(update_dict)
@@ -609,7 +609,7 @@ def _compare_n_patch_list(stored_list: List, updated_list: List):
                                 if len(update_dict) == 1:
                                     stored_list.remove(stored_list[stored_index])
                                     stored_id_idx_dict = \
-                                        {stored_obj.get("id"): idx for idx, stored_obj in enumerate(stored_list)}
+                                        {stored_obj.get("_id"): idx for idx, stored_obj in enumerate(stored_list)}
                                 else:
                                     # patch operation on dict in stored_list to update
                                     stored_list[stored_index] = \
@@ -637,18 +637,23 @@ def _compare_n_patch_list(stored_list: List, updated_list: List):
 
 def compare_n_patch_dict(stored_dict: Dict, updated_dict: Dict):
     for key, updated_value in updated_dict.items():
-        if updated_value is not None:
-            stored_value = stored_dict[key]
-            if isinstance(stored_value, dict):
+        stored_value = stored_dict[key]
+        if isinstance(stored_value, dict):
+            if updated_value is not None:
                 # dict value type is container, pass extracted (reference modified directly)
                 compare_n_patch_dict(stored_value, updated_value)
-            elif isinstance(stored_value, list):
+            else:
+                stored_dict[key] = updated_value
+        elif isinstance(stored_value, list):
+            if updated_value is not None:
                 # list value type is container, pass extracted (reference modified directly)
                 _compare_n_patch_list(stored_value, updated_value)
-            elif stored_value != updated_value:  # avoid unwarranted lookup(simple types)/construction(complex types)
-                # non container types are just assigned (+ no patch support: add/overwrite if set)
+            else:
                 stored_dict[key] = updated_value
-            # else not required - old and new val are same
+        elif stored_value != updated_value:  # avoid unwarranted lookup(simple types)/construction(complex types)
+            # non container types are just assigned (+ no patch support: add/overwrite if set)
+            stored_dict[key] = updated_value
+        # else not required - old and new val are same
     return stored_dict
 
 
@@ -719,6 +724,17 @@ def perf_benchmark(func_callable):
         return_val = func_callable(*args, **kwargs)
         end_time = timeit.default_timer()
         delta = end_time - start_time
-        logging.debug(f"Callable {func_callable.__name__} took {delta} secs to complete")
+        logging.debug(f"Callable {func_callable.__name__} took {delta} secs to complete, "
+                      f"start: {start_time}, end: {end_time}")
         return return_val
     return benchmarker
+
+
+def parse_to_int(int_str: str) -> int:
+    try:
+        parsed_int = int(int_str)
+        return parsed_int
+    except ValueError as e:
+        err_str = f"{type(int_str)} is not parsable to integer, exception: {e}"
+        logging.exception(err_str)
+        raise Exception(err_str)
