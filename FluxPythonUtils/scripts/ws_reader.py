@@ -62,7 +62,8 @@ class WSReader:
             pydantic_obj_list = PydanticClassListType(__root__=json_data)
             return pydantic_obj_list
         except Exception as e:
-            logging.error(f"list type: {PydanticClassListType} json decode failed;;;json_data: {json_data}")
+            logging.exception(f"list type: {PydanticClassListType} json decode failed;;;json_data: {json_data}, "
+                              f"exception: {e}")
             return None
 
     @staticmethod
@@ -71,7 +72,7 @@ class WSReader:
             pydantic_obj = PydanticClassType(**json_data)
             return pydantic_obj
         except Exception as e:
-            logging.error(f"{PydanticClassType} json decode failed;;;exception: {e}, json_data: {json_data}")
+            logging.exception(f"{PydanticClassType} json decode failed;;;exception: {e}, json_data: {json_data}")
             return None
 
     @staticmethod
@@ -79,7 +80,7 @@ class WSReader:
         try:
             callback(pydantic_obj)
         except Exception as e:
-            logging.error(f"dropping this update - ws invoked callback threw exception;;;"
+            logging.exception(f"dropping this update - ws invoked callback threw exception;;;"
                           f"PydanticObj: {pydantic_obj}, Exception {e}")
 
     @staticmethod
@@ -88,9 +89,9 @@ class WSReader:
         try:
             json_data = json.loads(json_str)
         except Exception as e:
-            logging.error(f"dropping update, json loads failed, no json_data from json_str"
-                          f"first update for {ws_cont.PydanticClassTypeList}"
-                          f";;;Json str: {json_str}")
+            logging.exception(f"dropping update, json loads failed, no json_data from json_str"
+                              f"first update for {ws_cont.PydanticClassTypeList}"
+                              f";;;Json str: {json_str}, exception: {e}")
         # logging.debug(f"ws received json data;;;{json_data}---")
         if ws_cont.is_first:
             pydantic_obj_list = WSReader.read_pydantic_obj_list(json_data, ws_cont.PydanticClassTypeList)
@@ -141,8 +142,8 @@ class WSReader:
                 task = asyncio.create_task(ws_cont.ws.recv(), name=str(idx))
                 pending_tasks.append(task)
             except Exception as e:
-                logging.error(f"ws_client error while connecting/async task submission ws_cont: {ws_cont}, "
-                              f"exception: {e}")
+                logging.exception(f"ws_client error while connecting/async task submission ws_cont: {ws_cont}, "
+                                  f"exception: {e}")
         ws_remove_set = set()
         while len(pending_tasks):
             try:
@@ -151,7 +152,7 @@ class WSReader:
                 completed_tasks, pending_tasks = await asyncio.wait(pending_tasks, return_when=asyncio.FIRST_COMPLETED,
                                                                     timeout=20.0)
             except Exception as e:
-                logging.error(f"await asyncio.wait raised exception: {e}")
+                logging.exception(f"await asyncio.wait raised exception: {e}")
                 if not WSReader.shutdown:
                     continue
                 else:
@@ -176,8 +177,8 @@ class WSReader:
                     ws_remove_set.add(idx)
                 except ConnectionClosedError as e:
                     idx = int(data_found_task.get_name())
-                    logging.error('\n', f"web socket connection closed with error within while loop for idx {idx};;;"
-                                        f" Exception: {e}")
+                    logging.exception('\n', f"web socket connection closed with error within while loop for idx {idx};;;"
+                                      f" Exception: {e}")
                     ws_remove_set.add(idx)
                 except ConnectionClosed as e:
                     idx = int(data_found_task.get_name())

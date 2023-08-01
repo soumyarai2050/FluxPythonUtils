@@ -18,8 +18,10 @@ class JSONReplayOverHTTP:
         try:
             datetime.strptime(self.replay_date, "%Y-%m-%d")
         except ValueError as e:
-            logging.error(f"Invalid replay_date format. Expected format is YYYY-MM-DD, found: {self.replay_date}")
-            raise e
+            err_str = f"Invalid replay_date format. Expected format is YYYY-MM-DD, found: " \
+                      f"{self.replay_date};;; exception: {e}"
+            logging.exception(err_str)
+            raise Exception(err_str)
 
         if not os.path.exists(self.json_dir):
             error_str = f"Invalid json_dir path: {self.json_dir}"
@@ -40,9 +42,9 @@ class JSONReplayOverHTTP:
                     json_dict = json.loads(f.read())
                     self._publish_message(json_dict)
             except JSONDecodeError as e:
-                logging.error(f"Failed to load json message! {e}")
+                logging.exception(f"Failed to load json message! {e}")
             except Exception as e:
-                logging.error(f"Failed to publish message! {e}")
+                logging.exception(f"Failed to publish message! {e}")
 
     def _publish_message(self, message: Dict):
         message = json.dumps(message)

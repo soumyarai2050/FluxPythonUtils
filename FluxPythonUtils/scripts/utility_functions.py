@@ -1,25 +1,35 @@
 # Standard imports
+import asyncio
 import os
 import logging
 import pickle
 import re
-from typing import List, Dict, TypeVar, Callable, Tuple
+import threading
+from typing import List, Dict, TypeVar, Callable, Tuple, Type, Set
 import yaml
 from enum import IntEnum
 import json
 from pathlib import PurePath, Path
 import csv
+from websockets.exceptions import ConnectionClosedOK, ConnectionClosedError, ConnectionClosed
 from requests import Response
 from datetime import datetime
 import timeit
+import functools
 
 # 3rd party packages
 from pydantic import BaseModel
 import pandas as pd
 from pymongo import MongoClient
+import pymongoarrow.monkey
+from beanie.odm.documents import DocType
+from pendulum import DateTime
 
 # FluxPythonUtils Modules
 from FluxPythonUtils.scripts.yaml_importer import YAMLImporter
+
+# Adds extra utility methods of pymongoarrow.monkey to pymongo collection objects
+pymongoarrow.monkey.patch_all()
 
 BaseModelOrItsDerivedType = TypeVar('BaseModelOrItsDerivedType', BaseModel, Callable)
 
@@ -321,7 +331,7 @@ def file_exist(path: str) -> bool:
     return os.path.exists(path)
 
 
-def configure_logger(level: str, log_file_dir_path: str | None = None, log_file_name: str | None = None) -> None:
+def configure_logger(level: str | int, log_file_dir_path: str | None = None, log_file_name: str | None = None) -> None:
     """
     Function to config the logger in your trigger script of your project, creates log file in given log_dir_path.
     Takes project_name as parameter to fetch Level from configurations.py.
@@ -344,27 +354,30 @@ def configure_logger(level: str, log_file_dir_path: str | None = None, log_file_
         pass
 
     if level is not None:
-        """
-        CRITICAL	50
-        ERROR	    40
-        WARNING	    30
-        INFO	    20
-        DEBUG	    10
-        """
-        match level:
-            case "debug":
-                level = logging.DEBUG
-            case "info":
-                level = logging.INFO
-            case "warning":
-                level = logging.WARNING
-            case "error":
-                level = logging.ERROR
-            case "critical":
-                level = logging.CRITICAL
-            case other:
-                error_msg: str = f"Unsupported logging level: {other}"
-                raise Exception(error_msg)
+        if isinstance(level, str):
+            """
+            CRITICAL	50
+            ERROR	    40
+            WARNING	    30
+            INFO	    20
+            DEBUG	    10
+            """
+            match level.lower():
+                case "debug":
+                    level = logging.DEBUG
+                case "info":
+                    level = logging.INFO
+                case "warning":
+                    level = logging.WARNING
+                case "error":
+                    level = logging.ERROR
+                case "critical":
+                    level = logging.CRITICAL
+                case other:
+                    error_msg: str = f"Unsupported logging level: {other}"
+                    raise Exception(error_msg)
+        # else not required: else taking int log lvl value provided
+
     else:
         error_msg: str = f"logger level cant be none"
         raise Exception(error_msg)
@@ -375,6 +388,77 @@ def configure_logger(level: str, log_file_dir_path: str | None = None, log_file_
         format="%(asctime)s : %(levelname)s : [%(filename)s : %(lineno)d] : %(message)s",
         force=True
     )
+
+
+def add_logging_level(level_name: str, level_num: int, method_name: str | None = None):
+    """
+    Important: Impl took from
+    https://stackoverflow.com/questions/2183233/how-to-add-a-custom-loglevel-to-pythons-logging-facility/35804945#35804945
+
+    Comprehensively adds a new logging level to the `logging` module and the
+    currently configured logging class.
+
+    `levelName` becomes an attribute of the `logging` module with the value
+    `levelNum`. `methodName` becomes a convenience method for both `logging`
+    itself and the class returned by `logging.getLoggerClass()` (usually just
+    `logging.Logger`). If `methodName` is not specified, `levelName.lower()` is
+    used.
+
+    To avoid accidental clobberings of existing attributes, this method will
+    raise an `AttributeError` if the level name is already an attribute of the
+    `logging` module or if the method name is already present
+
+    Example
+    -------
+    > addLoggingLevel('TRACE', logging.DEBUG - 5)
+    > logging.getLogger(__name__).setLevel("TRACE")
+    > logging.getLogger(__name__).trace('that worked')
+    > logging.trace('so did this')
+    > logging.TRACE
+    5
+    """
+    if not method_name:
+        method_name = level_name.lower()
+
+    if hasattr(logging, level_name):
+        raise AttributeError('{} already defined in logging module'.format(level_name))
+    if hasattr(logging, method_name):
+        raise AttributeError('{} already defined in logging module'.format(method_name))
+    if hasattr(logging.getLoggerClass(), method_name):
+        raise AttributeError('{} already defined in logger class'.format(method_name))
+
+    # This method was inspired by the answers to Stack Overflow post
+    # http://stackoverflow.com/q/2183233/2988730, especially
+    # http://stackoverflow.com/a/13638084/2988730
+    def log_for_level(self, message, *args, **kwargs):
+        if self.isEnabledFor(level_num):
+            self._log(level_num, message, args, **kwargs)
+
+    def log_to_root(message, *args, **kwargs):
+        logging.log(level_num, message, *args, **kwargs)
+
+    logging.addLevelName(level_num, level_name)
+    setattr(logging, level_name, level_num)
+    setattr(logging.getLoggerClass(), method_name, log_for_level)
+    setattr(logging, method_name, log_to_root)
+
+
+def add_logging_levels(log_lvl_to_log_value_dict_list: List[Dict[str, int]]):
+    for log_lvl_to_log_value_dict in log_lvl_to_log_value_dict_list:
+        log_lvl_name_list = list(log_lvl_to_log_value_dict.keys())
+        if (log_key_len := len(log_lvl_name_list)) == 1:
+            log_lvl_name = log_lvl_name_list[0]
+            log_lvl_value = parse_to_int(log_lvl_to_log_value_dict[log_lvl_name])
+            add_logging_level(log_lvl_name, log_lvl_value)
+        else:
+            err_str = f"Expected only one key for log_lvl_name with value log_lvl_value, received: {log_key_len}, " \
+                      f";;; log_lvl_to_log_value_dict_list: {log_lvl_to_log_value_dict_list}"
+            logging.exception(err_str)
+            raise Exception(err_str)
+
+
+def set_logger_level(log_level: str):
+    logging.getLogger().setLevel(log_level)
 
 
 def filter_keywords(filter_str: str, keywords_list: List[str]) -> bool:
@@ -392,70 +476,97 @@ def filter_keywords(filter_str: str, keywords_list: List[str]) -> bool:
     return False
 
 
-def yaml_loader(file_path: str):
-    with open(file_path) as f:
-        data = yaml.load(f, Loader=YAMLImporter)
-    return data
+class YAMLConfigurationManager:
+    """
+    Class handling to make the fetching of yaml configurations efficient
 
+    Created the cache of fetched content in dict with path as key and returns from
+    there if exists already else creates entry in cache
+    """
+    load_yaml_mutex: threading.Lock = threading.Lock()
+    path_to_content_dict: Dict[str, str] | Dict[str, Dict] = {}
 
-def load_yaml_configurations(config_file_path: str | None = None,
-                             default_config_file_path: str | None = "configurations.yaml",
-                             load_as_str: bool = False) -> Dict | str:
-    if config_file_path is None:
-        if file_exist(default_config_file_path):
-            if not load_as_str:
-                return yaml_loader(default_config_file_path)
-            else:
-                with open(default_config_file_path) as f:
-                    return f.read()
-        else:
-            err_str = f"No {default_config_file_path} exists in this script's directory. " \
-                      f"Either make one or pass another file's path as parameter;;;"
-            logging.exception(err_str)
-            raise Exception(err_str)
-    else:
-        if file_exist(config_file_path):
-            if not load_as_str:
-                return yaml_loader(config_file_path)
-            else:
-                with open(config_file_path) as f:
-                    return f.read()
-        else:
-            err_str = f"No file: {config_file_path} exist"
-            logging.exception(err_str)
-            raise Exception(err_str)
+    @classmethod
+    def _yaml_loader(cls, file_path: str) -> Dict:
+        with open(file_path) as f:
+            data = yaml.load(f, Loader=YAMLImporter)
+        cls.path_to_content_dict[f"{file_path}_dict"] = data
+        return data
 
+    @classmethod
+    def _str_loader(cls, file_path: str) -> str:
+        with open(file_path) as f:
+            data = f.read()
+        cls.path_to_content_dict[f"{file_path}_str"] = data
+        return data
 
-def update_yaml_configurations(yaml_content: Dict | str, config_file_path: str | None = None,
-                               default_config_file_path: str | None = "configurations.yaml") -> None:
-    if isinstance(yaml_content, Dict):
-        is_dict = True
-    else:
-        is_dict = False
-
-    if config_file_path is None:
-        if file_exist(default_config_file_path):
-            with open(default_config_file_path, "w") as f:
-                if is_dict:
-                    yaml.dump(yaml_content, f)
+    @classmethod
+    def load_yaml_configurations(cls, config_file_path: str | None = None,
+                                 default_config_file_path: str | None = "configurations.yaml",
+                                 load_as_str: bool = False) -> Dict | str:
+        if config_file_path is None:
+            with cls.load_yaml_mutex:
+                if default_config_file_path in cls.path_to_content_dict:
+                    key = default_config_file_path + "_str" if load_as_str else "_dict"
+                    return cls.path_to_content_dict.get(key)
                 else:
-                    f.write(yaml_content)
+                    if file_exist(default_config_file_path):
+                        if not load_as_str:
+                            return cls._yaml_loader(default_config_file_path)
+                        else:
+                            return cls._str_loader(default_config_file_path)
+                    else:
+                        err_str = f"No {default_config_file_path} exists in this script's directory. " \
+                                  f"Either make one or pass another file's path as parameter;;;"
+                        logging.exception(err_str)
+                        raise Exception(err_str)
         else:
-            err_str = f"No {default_config_file_path} exists in this script's directory. " \
-                      f"Either make one or pass another file's path as parameter;;;"
-            logging.exception(err_str)
-            raise Exception(err_str)
-    else:
-        if file_exist(config_file_path):
-            with open(config_file_path, "w") as f:
-                if is_dict:
-                    yaml.dump(yaml_content, f)
+            with cls.load_yaml_mutex:
+                if config_file_path in cls.path_to_content_dict:
+                    key = config_file_path + "_str" if load_as_str else "_dict"
+                    return cls.path_to_content_dict.get(key)
                 else:
-                    f.write(yaml_content)
+                    if file_exist(config_file_path):
+                        if not load_as_str:
+                            return cls._yaml_loader(config_file_path)
+                        else:
+                            return cls._str_loader(config_file_path)
+                    else:
+                        err_str = f"No file: {config_file_path} exist"
+                        logging.exception(err_str)
+                        raise Exception(err_str)
+
+    @classmethod
+    def update_yaml_configurations(cls, yaml_content: Dict | str, config_file_path: str | None = None,
+                                   default_config_file_path: str | None = "configurations.yaml") -> None:
+        if isinstance(yaml_content, Dict):
+            is_dict = True
         else:
-            err_str = f"No file: {config_file_path} exist"
-            logging.exception(err_str)
-            raise Exception(err_str)
+            is_dict = False
+
+        if config_file_path is None:
+            if file_exist(default_config_file_path):
+                with open(default_config_file_path, "w") as f:
+                    if is_dict:
+                        yaml.dump(yaml_content, f)
+                    else:
+                        f.write(yaml_content)
+            else:
+                err_str = f"No {default_config_file_path} exists in this script's directory. " \
+                          f"Either make one or pass another file's path as parameter;;;"
+                logging.exception(err_str)
+                raise Exception(err_str)
+        else:
+            if file_exist(config_file_path):
+                with open(config_file_path, "w") as f:
+                    if is_dict:
+                        yaml.dump(yaml_content, f)
+                    else:
+                        f.write(yaml_content)
+            else:
+                err_str = f"No file: {config_file_path} exist"
+                logging.exception(err_str)
+                raise Exception(err_str)
 
 
 def find_acronyms_in_string(data: str) -> List[str]:
@@ -576,7 +687,7 @@ def _find_matching_list(underlying_updated_list: List, stored_list_of_list: List
     return matching_list
 
 
-def _compare_n_patch_list(stored_list: List, updated_list: List):
+def compare_n_patch_list(stored_list: List, updated_list: List):
     if stored_list:
         # get datatype of 1st list element, others must be same datatype (multi datatype list patch not-supported)
         if isinstance(stored_list[0], list):  # list of list
@@ -587,7 +698,7 @@ def _compare_n_patch_list(stored_list: List, updated_list: List):
                         # this underlying updated list is new - append to stored_list (stored list of list)
                         stored_list.append(underlying_updated_list)
                     else:
-                        _compare_n_patch_list(underlying_stored_list, underlying_updated_list)
+                        compare_n_patch_list(underlying_stored_list, underlying_updated_list)
             else:
                 err_str = "updated_list's elements are not same datatypes as stored_list's elements;;;"
                 logging.exception(err_str)
@@ -615,7 +726,8 @@ def _compare_n_patch_list(stored_list: List, updated_list: List):
                                     stored_list[stored_index] = \
                                         compare_n_patch_dict(stored_list[stored_index], update_dict)
                         else:
-                            err_str = "updated_list's dict elements don't have id field but stored_list's elements do;;;"
+                            err_str = "updated_list's dict elements don't have id field but stored_list's " \
+                                      "elements do;;;"
                             logging.exception(err_str)
                             raise Exception(err_str)
                     else:
@@ -647,7 +759,7 @@ def compare_n_patch_dict(stored_dict: Dict, updated_dict: Dict):
         elif isinstance(stored_value, list):
             if updated_value is not None:
                 # list value type is container, pass extracted (reference modified directly)
-                _compare_n_patch_list(stored_value, updated_value)
+                compare_n_patch_list(stored_value, updated_value)
             else:
                 stored_dict[key] = updated_value
         elif stored_value != updated_value:  # avoid unwarranted lookup(simple types)/construction(complex types)
@@ -657,10 +769,23 @@ def compare_n_patch_dict(stored_dict: Dict, updated_dict: Dict):
     return stored_dict
 
 
-def get_host_port_from_env(default_host: str = "127.0.0.1", default_port: int = 8020) -> Tuple[str, int]:
-    host_str: str = default_host if (host_env := os.getenv("HOST")) is None or len(host_env) == 0 else host_env
-    port_str: str = str(default_port) if (port_env := (os.getenv("PORT"))) is None or len(port_env) == 0 else port_env
-    int_port: int = int(port_str)
+def get_beanie_host_port_from_env(project_name: str, default_host: str = "127.0.0.1",
+                                  default_port: int = 8020) -> Tuple[str, int]:
+    port_env_var_name: str = f"{project_name.upper()}_BEANIE_PORT"
+    host_str: str = default_host if ((host_env := os.getenv("HOST")) is None or len(host_env) == 0) else host_env
+    port_str: str = str(default_port) if ((port_env := (os.getenv(port_env_var_name))) is None or
+                                          len(port_env) == 0) else port_env
+    int_port: int = parse_to_int(port_str)
+    return host_str, int_port
+
+
+def get_cache_host_port_from_env(project_name: str, default_host: str = "127.0.0.1",
+                                 default_port: int = 8030) -> Tuple[str, int]:
+    port_env_var_name: str = f"{project_name.upper()}_CACHE_PORT"
+    host_str: str = default_host if ((host_env := os.getenv("HOST")) is None or len(host_env) == 0) else host_env
+    port_str: str = str(default_port) if ((port_env := (os.getenv(port_env_var_name))) is None or
+                                          len(port_env) == 0) else port_env
+    int_port: int = parse_to_int(port_str)
     return host_str, int_port
 
 
@@ -717,20 +842,27 @@ def get_version_from_mongodb_uri(mongo_server_uri: str) -> str:
     return client.server_info().get("version")
 
 
+def get_time_it_log_pattern(callable_name: str, date_time: DateTime, start_time: float, end_time: float, delta: float):
+    pattern_str = f"_timeit_{callable_name}~{date_time}~{start_time}~{end_time}~{delta}_timeit_"
+    return pattern_str
+
+
 # Decorator Function
 def perf_benchmark(func_callable):
-    def benchmarker(*args, **kwargs):
+    @functools.wraps(func_callable)
+    async def benchmarker(*args, **kwargs):
         start_time = timeit.default_timer()
-        return_val = func_callable(*args, **kwargs)
+        return_val = await func_callable(*args, **kwargs)
         end_time = timeit.default_timer()
-        delta = end_time - start_time
-        logging.debug(f"Callable {func_callable.__name__} took {delta} secs to complete, "
-                      f"start: {start_time}, end: {end_time}")
+        delta = parse_to_float(f"{(end_time - start_time):.6f}")
+
+        pattern_str = get_time_it_log_pattern(func_callable.__name__, DateTime.utcnow(), start_time, end_time, delta)
+        logging.timing(pattern_str)
         return return_val
     return benchmarker
 
 
-def parse_to_int(int_str: str) -> int:
+def parse_to_int(int_str: str | int | float) -> int:
     try:
         parsed_int = int(int_str)
         return parsed_int
@@ -738,3 +870,128 @@ def parse_to_int(int_str: str) -> int:
         err_str = f"{type(int_str)} is not parsable to integer, exception: {e}"
         logging.exception(err_str)
         raise Exception(err_str)
+
+
+def parse_to_float(float_str: str) -> float:
+    try:
+        parsed_float = float(float_str)
+        return parsed_float
+    except ValueError as e:
+        err_str = f"{type(float_str)} is not parsable to float, exception: {e}"
+        logging.exception(err_str)
+        raise Exception(err_str)
+
+
+def _connect_mongo(host, port, username, password, db):
+    """ A util for making a connection to mongo """
+
+    if username and password:
+        mongo_uri = f'mongodb://{username}:{password}@{host}:{port}/{db}'
+        conn = MongoClient(mongo_uri)
+    else:
+        conn = MongoClient(host, port)
+
+    return conn[db]
+
+
+def read_mongo_collection_as_dataframe(db: str, collection: str, agg_pipeline: List | None = None,
+                                       host: str | None = 'localhost', port: int | None = 27017,
+                                       username: str | None = None, password: str | None = None,
+                                       no_id: bool | None = True):
+    """ Read from Mongo and Store into DataFrame """
+
+
+    # Connect to MongoDB
+    db = _connect_mongo(host=host, port=port, username=username, password=password, db=db)
+
+    if agg_pipeline is None:
+        agg_pipeline = []
+
+    collection = db.get_collection(collection)
+
+    # construct the DataFrame
+    df = collection.aggregate_pandas_all(agg_pipeline)
+
+    # Delete the _id
+    if no_id and not df.empty:
+        del df['_id']
+
+    return df
+
+
+def get_native_host_n_port_from_config_dict(config_dict: Dict) -> Tuple[str, int]:
+    cache_override_type = config_dict.get("cache_override_type")
+
+    if cache_override_type is not None and cache_override_type.lower() == "native":
+        host, port = config_dict.get("cache_host"), parse_to_int(config_dict.get("cache_port"))
+    else:
+        host, port = config_dict.get("beanie_host"), parse_to_int(config_dict.get("beanie_port"))
+    return host, port
+
+
+async def execute_tasks_list_with_all_completed(tasks_list: List[asyncio.Task], pydantic_class_type: Type[DocType],
+                                                timeout: float = 20.0):
+    pending_tasks: Set[asyncio.Task] | None = None
+    completed_tasks: Set[asyncio.Task] | None = None
+    if tasks_list:
+        try:
+            # wait doesn't raise TimeoutError! Futures that aren't done when timeout occurs are returned in 2nd set
+            completed_tasks, pending_tasks = await asyncio.wait(tasks_list, return_when=asyncio.ALL_COMPLETED,
+                                                                timeout=timeout)
+        except Exception as e:
+            logging.exception(f"await asyncio.wait raised exception: {e}")
+    else:
+        logging.debug("unexpected: Called execute_tasks_list_with_all_completed with empty tasks_list for model: "
+                      f"{pydantic_class_type.__name__}")
+
+    if not completed_tasks:
+        if pending_tasks:
+            logging.error("Unexpected: Received no completed task from return of asyncio.wait"
+                          f"dropped PendingTasks: {[pending_task for pending_task in pending_tasks]}")
+        else:
+            logging.error("Unexpected: Received no completed or pending task from return of asyncio.wait "
+                          f"in-spite sending tasks_list: {[task for task in tasks_list]}")
+        return
+
+    while completed_tasks:
+        completed_task = None
+        try:
+            completed_task = completed_tasks.pop()
+        except Exception as e:
+            logging.exception(f"execute_tasks_list_with_all_completed failed for task name: {completed_task.get_name()}"
+                              f", task: {completed_task} with exception: {e}")
+    if pending_tasks:
+        logging.error("Received timed out pending tasks from asyncio.wait, dropping them. "
+                      f"PendingTasks: {[pending_task for pending_task in pending_tasks]}")
+
+
+async def execute_tasks_list_with_first_completed(tasks_list: List[asyncio.Task],
+                                                  pydantic_class_type: Type[DocType],
+                                                  timeout: float = 20.0):
+    pending_tasks: Set[asyncio.Task] = set(tasks_list)
+    completed_tasks: Set[asyncio.Task] | None = None
+    while len(pending_tasks):
+        try:
+            # wait doesn't raise TimeoutError! Futures that aren't done when timeout occurs are returned in 2nd set
+            completed_tasks, pending_tasks = await asyncio.wait(pending_tasks, return_when=asyncio.FIRST_COMPLETED,
+                                                                timeout=timeout)
+        except Exception as e:
+            logging.exception(f"for model: {pydantic_class_type.__name__} await asyncio.wait raised exception: {e}")
+
+        # completed_tasks will be set of tasks or empty set or None
+        while completed_tasks:
+            completed_task = None
+            try:
+                completed_task = completed_tasks.pop()
+            except ConnectionClosedOK as e:
+                logging.debug('\n', f"ConnectionClosedOK error in task with name: "
+                                    f"{completed_task.get_name()};;; Exception: {e}")
+            except ConnectionClosedError as e:
+                logging.exception('\n', f"ConnectionClosedError error in task with name: "
+                                        f"{completed_task.get_name()};;; Exception: {e}")
+            except ConnectionClosed as e:
+                logging.debug('\n', f"ConnectionClosed error in task with name: "
+                                    f"{completed_task.get_name()};;; Exception: {e}")
+            except Exception as e:
+                logging.debug('\n', f"execute_tasks_list_with_first_completed failed for task "
+                                    f"{completed_task.get_name()};;; Exception: {e}")

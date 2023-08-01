@@ -7,7 +7,7 @@ from FluxPythonUtils.email_adapter.email_client import EmailClient
 from config.configuration import Configuration
 
 # FluxPythonUtils modules
-from FluxPythonUtils.scripts.utility_functions import yaml_loader, configure_logger
+from FluxPythonUtils.scripts.utility_functions import YAMLConfigurationManager, configure_logger
 
 
 class EmailUser:
@@ -60,8 +60,8 @@ if __name__ == "__main__":
     def test():
         project_name: str = "Pythoncore"
         config_obj = Configuration.get_instance(project_name)
-        config = yaml_loader(config_obj.yaml_config_path)
-        secret = yaml_loader(config_obj.yaml_secret_path)
+        config = YAMLConfigurationManager.load_yaml_configurations(config_obj.yaml_config_path)
+        secret = YAMLConfigurationManager.load_yaml_configurations(config_obj.yaml_secret_path)
 
         logger_level: str = config["email_logger_level"]
         configure_logger(logger_level, config_obj.log_file_path)
