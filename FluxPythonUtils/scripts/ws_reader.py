@@ -72,7 +72,8 @@ class WSReader:
             pydantic_obj = PydanticClassType(**json_data)
             return pydantic_obj
         except Exception as e:
-            logging.exception(f"{PydanticClassType} json decode failed;;;exception: {e}, json_data: {json_data}")
+            logging.exception(f"{PydanticClassType.__name__} json decode failed;;;"
+                              f"exception: {e}, json_data: {json_data}")
             return None
 
     @staticmethod
@@ -81,10 +82,10 @@ class WSReader:
             callback(pydantic_obj)
         except Exception as e:
             logging.exception(f"dropping this update - ws invoked callback threw exception;;;"
-                          f"PydanticObj: {pydantic_obj}, Exception {e}")
+                              f"PydanticObj: {pydantic_obj}, Exception {e}")
 
     @staticmethod
-    def handle_json_str(json_str, ws_cont):
+    def handle_json_str(json_str: str, ws_cont):
         json_data = None
         try:
             json_data = json.loads(json_str)
@@ -92,38 +93,18 @@ class WSReader:
             logging.exception(f"dropping update, json loads failed, no json_data from json_str"
                               f"first update for {ws_cont.PydanticClassTypeList}"
                               f";;;Json str: {json_str}, exception: {e}")
-        # logging.debug(f"ws received json data;;;{json_data}---")
-        if ws_cont.is_first:
+        if isinstance(json_data, dict):
+            pydantic_obj = WSReader.read_pydantic_obj(json_data, ws_cont.PydanticClassType)
+            if pydantic_obj:
+                WSReader.dispatch_pydantic_obj(pydantic_obj, ws_cont.callback)
+        elif isinstance(json_data, list):
             pydantic_obj_list = WSReader.read_pydantic_obj_list(json_data, ws_cont.PydanticClassTypeList)
             if pydantic_obj_list is not None:
                 for pydantic_obj in pydantic_obj_list.__root__:
                     WSReader.dispatch_pydantic_obj(pydantic_obj, ws_cont.callback)
-            else:
-                logging.error(f"first message is not-list, attempting direct object conversion instead with for "
-                              f"{ws_cont.PydanticClassType};;;json_str: {json_str}")
-                pydantic_obj = WSReader.read_pydantic_obj(json_data, ws_cont.PydanticClassType)
-                if pydantic_obj:
-                    WSReader.dispatch_pydantic_obj(pydantic_obj, ws_cont.callback)
-                else:
-                    logging.error(f"dropping update, list/non-list both attempts failed to parse received "
-                                  f"first update for {ws_cont.PydanticClassTypeList}"
-                                  f";;;Json data: {json_data}")
-            ws_cont.is_first = False
         else:
-            pydantic_obj = WSReader.read_pydantic_obj(json_data, ws_cont.PydanticClassType)
-            if pydantic_obj:
-                WSReader.dispatch_pydantic_obj(pydantic_obj, ws_cont.callback)
-            else:
-                logging.error("parsing failed, likely non-first list message, attempting list object "
-                              f"conversion with {ws_cont.PydanticClassTypeList};;;json_data: {json_data}")
-                pydantic_obj_list = WSReader.read_pydantic_obj_list(json_data, ws_cont.PydanticClassTypeList)
-                if pydantic_obj_list is not None:
-                    for pydantic_obj in pydantic_obj_list.__root__:
-                        WSReader.dispatch_pydantic_obj(pydantic_obj, ws_cont.callback)
-                else:
-                    logging.error(f"dropping update, list: {ws_cont.PydanticClassTypeList}/non-list: "
-                                  f"{ws_cont.PydanticClassType} both attempts failed to parse received non-first data"
-                                  f";;;Json data: {json_data}")
+            logging.error(f"Dropping update: loaded json from json_str is not instance of list or dict, "
+                          f"json type: {type(json_data)} for {ws_cont.PydanticClassType};;; json_str: {json_str}")
 
     # handle connection and communication with the server
     # TODO BUF FIX: current implementation would lose connection permanently if server is restarted forcing meed for
