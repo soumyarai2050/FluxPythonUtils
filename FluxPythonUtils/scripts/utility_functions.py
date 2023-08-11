@@ -6,6 +6,8 @@ import pickle
 import re
 import threading
 from typing import List, Dict, TypeVar, Callable, Tuple, Type, Set
+
+import pandas
 import yaml
 from enum import IntEnum
 import json
@@ -882,7 +884,8 @@ def parse_to_float(float_str: str) -> float:
         raise Exception(err_str)
 
 
-def _connect_mongo(host, port, username, password, db):
+def _connect_mongo(db: str, host: str | None = 'localhost', port: int | None = 27017,
+                   username: str | None = None, password: str | None = None):
     """ A util for making a connection to mongo """
 
     if username and password:
@@ -897,12 +900,12 @@ def _connect_mongo(host, port, username, password, db):
 def read_mongo_collection_as_dataframe(db: str, collection: str, agg_pipeline: List | None = None,
                                        host: str | None = 'localhost', port: int | None = 27017,
                                        username: str | None = None, password: str | None = None,
-                                       no_id: bool | None = True):
+                                       no_id: bool | None = True) -> pandas.DataFrame:
     """ Read from Mongo and Store into DataFrame """
 
 
     # Connect to MongoDB
-    db = _connect_mongo(host=host, port=port, username=username, password=password, db=db)
+    db = _connect_mongo(db=db, host=host, port=port, username=username, password=password)
 
     if agg_pipeline is None:
         agg_pipeline = []
@@ -910,7 +913,7 @@ def read_mongo_collection_as_dataframe(db: str, collection: str, agg_pipeline: L
     collection = db.get_collection(collection)
 
     # construct the DataFrame
-    df = collection.aggregate_pandas_all(agg_pipeline)
+    df: pandas.DataFrame = collection.aggregate_pandas_all(agg_pipeline)
 
     # Delete the _id
     if no_id and not df.empty:
@@ -929,7 +932,8 @@ def get_native_host_n_port_from_config_dict(config_dict: Dict) -> Tuple[str, int
     return host, port
 
 
-async def execute_tasks_list_with_all_completed(tasks_list: List[asyncio.Task], pydantic_class_type: Type[DocType],
+async def execute_tasks_list_with_all_completed(tasks_list: List[asyncio.Task],
+                                                pydantic_class_type: Type[DocType] | Type[BaseModel],
                                                 timeout: float = 20.0):
     pending_tasks: Set[asyncio.Task] | None = None
     completed_tasks: Set[asyncio.Task] | None = None
