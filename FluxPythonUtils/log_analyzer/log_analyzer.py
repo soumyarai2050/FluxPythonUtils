@@ -91,17 +91,16 @@ class LogAnalyzer(ABC):
                       bulk_transaction_timeout: int, web_client_callable):
         pydantic_obj_list = []
         oldest_entry_time: DateTime = DateTime.utcnow()
-        remaining_timeout_secs = None
         while True:
             if not pydantic_obj_list:
                 remaining_timeout_secs = bulk_transaction_timeout
             else:
                 remaining_timeout_secs = (
-                        remaining_timeout_secs - (DateTime.utcnow() - oldest_entry_time).total_seconds())
+                        bulk_transaction_timeout - (DateTime.utcnow() - oldest_entry_time).total_seconds())
 
             if not remaining_timeout_secs < 1:
                 try:
-                    pydantic_obj = queue_obj.get(timeout=remaining_timeout_secs)    # timeout based blocking call
+                    pydantic_obj = queue_obj.get(timeout=remaining_timeout_secs)  # timeout based blocking call
                     pydantic_obj_list.append(pydantic_obj)
                 except queue.Empty:
                     # since bulk update timeout limit has breached, will call update
@@ -114,8 +113,8 @@ class LogAnalyzer(ABC):
 
             if pydantic_obj_list:
                 web_client_callable(pydantic_obj_list)
-                pydantic_obj_list.clear()    # cleaning list to start fresh cycle
-                oldest_entry_time = DateTime.utcnow()
+                pydantic_obj_list.clear()  # cleaning list to start fresh cycle
+            oldest_entry_time = DateTime.utcnow()
             # else not required since even after timeout no data found
 
     def run(self):
