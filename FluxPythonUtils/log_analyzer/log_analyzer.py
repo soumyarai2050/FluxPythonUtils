@@ -359,14 +359,12 @@ class LogAnalyzer(ABC):
                 if callable_name != "underlying_create_raw_performance_data_http":
                     raw_performance_data_obj = self.raw_performance_data_model_type()
                     raw_performance_data_obj.callable_name = callable_name
-                    raw_performance_data_obj.call_date_time = parse(date_time)
-                    raw_performance_data_obj.start_time_it_val = parse_to_float(start_time)
-                    raw_performance_data_obj.end_time_it_val = parse_to_float(end_time)
+                    raw_performance_data_obj.start_time = parse(start_time)
                     raw_performance_data_obj.delta = parse_to_float(delta)
 
                     self.raw_performance_data_queue.put(raw_performance_data_obj)
                     logging.debug(f"Created raw_performance_data in db for callable {callable_name} "
-                                  f"with datetime {date_time}")
+                                  f"with start_datetime {start_time}")
                 # else not required: avoiding callable underlying_create_raw_performance_data to avoid infinite loop
             else:
                 err_str_: str = f"Found timeit pattern but internally only contains {found_pattern_list}, " \

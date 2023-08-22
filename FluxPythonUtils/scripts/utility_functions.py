@@ -805,7 +805,7 @@ def db_collections(mongo_server_uri: str, database_name: str, ignore_collections
         db = client.get_database(name=database_name)
         collections: List[str] = db.list_collection_names()
         for collection in collections:
-            if collection not in ignore_collections:
+            if collection not in ignore_collections and "." not in collection:
                 yield db[collection]
     except Exception as e:
         err_str = f"drop_mongo_collections failed for DB: {database_name};;;exception: {e}"
@@ -844,8 +844,8 @@ def get_version_from_mongodb_uri(mongo_server_uri: str) -> str:
     return client.server_info().get("version")
 
 
-def get_time_it_log_pattern(callable_name: str, date_time: DateTime, start_time: float, end_time: float, delta: float):
-    pattern_str = f"_timeit_{callable_name}~{date_time}~{start_time}~{end_time}~{delta}_timeit_"
+def get_time_it_log_pattern(callable_name: str, start_time: DateTime, delta: float):
+    pattern_str = f"_timeit_{callable_name}~{start_time}~{delta}_timeit_"
     return pattern_str
 
 
@@ -853,12 +853,13 @@ def get_time_it_log_pattern(callable_name: str, date_time: DateTime, start_time:
 def perf_benchmark(func_callable):
     @functools.wraps(func_callable)
     async def benchmarker(*args, **kwargs):
+        call_date_time = DateTime.utcnow()
         start_time = timeit.default_timer()
         return_val = await func_callable(*args, **kwargs)
         end_time = timeit.default_timer()
         delta = parse_to_float(f"{(end_time - start_time):.6f}")
 
-        pattern_str = get_time_it_log_pattern(func_callable.__name__, DateTime.utcnow(), start_time, end_time, delta)
+        pattern_str = get_time_it_log_pattern(func_callable.__name__, call_date_time, delta)
         logging.timing(pattern_str)
         return return_val
     return benchmarker
