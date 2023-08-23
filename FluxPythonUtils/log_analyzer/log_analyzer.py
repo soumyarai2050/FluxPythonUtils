@@ -355,7 +355,7 @@ class LogAnalyzer(ABC):
             found_pattern = found_pattern[8:-8]  # removing beginning and ending _timeit_
             found_pattern_list = found_pattern.split("~")  # splitting pattern values
             if len(found_pattern_list) == 5:
-                callable_name, date_time, start_time, end_time, delta = found_pattern_list
+                callable_name, start_time, delta = found_pattern_list
                 if callable_name != "underlying_create_raw_performance_data_http":
                     raw_performance_data_obj = self.raw_performance_data_model_type()
                     raw_performance_data_obj.callable_name = callable_name
