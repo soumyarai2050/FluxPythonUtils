@@ -354,7 +354,7 @@ class LogAnalyzer(ABC):
             found_pattern = search_obj.group()
             found_pattern = found_pattern[8:-8]  # removing beginning and ending _timeit_
             found_pattern_list = found_pattern.split("~")  # splitting pattern values
-            if len(found_pattern_list) == 5:
+            if len(found_pattern_list) == 3:
                 callable_name, start_time, delta = found_pattern_list
                 if callable_name != "underlying_create_raw_performance_data_http":
                     raw_performance_data_obj = self.raw_performance_data_model_type()
@@ -368,7 +368,7 @@ class LogAnalyzer(ABC):
                 # else not required: avoiding callable underlying_create_raw_performance_data to avoid infinite loop
             else:
                 err_str_: str = f"Found timeit pattern but internally only contains {found_pattern_list}, " \
-                                f"ideally must contain callable_name, date_time, start_time, end_time & delta " \
+                                f"ideally must contain callable_name, start_time & delta " \
                                 f"seperated by '~'"
                 logging.exception(err_str_)
         # else not required: if no pattern is matched ignoring this log_message
