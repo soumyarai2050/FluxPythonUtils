@@ -92,10 +92,13 @@ def http_response_as_class_type(url, response, expected_status_code, pydantic_ty
                                 http_request_type: HTTPRequestType):
     status_code, response_json = handle_http_response(response)
     if status_code == expected_status_code:
-        if isinstance(response_json, list):
-            return [pydantic_type(**response_obj) for response_obj in response_json]
+        if isinstance(response_json, bool):
+            return response_json
         else:
-            return pydantic_type(**response_json)
+            if isinstance(response_json, list):
+                return [pydantic_type(**response_obj) for response_obj in response_json]
+            else:
+                return pydantic_type(**response_json)
     else:
         raise Exception(f"failed for url: {url}, http_request_type: {str(http_request_type)} "
                         f"http_error: {response_json}, status_code: {status_code}")
@@ -536,7 +539,7 @@ class YAMLConfigurationManager:
                     else:
                         err_str = f"No file: {config_file_path} exist"
                         logging.exception(err_str)
-                        raise Exception(err_str)
+                        raise FileNotFoundError(err_str)
 
     @classmethod
     def update_yaml_configurations(cls, yaml_content: Dict | str, config_file_path: str | None = None,
@@ -923,6 +926,25 @@ def read_mongo_collection_as_dataframe(db: str, collection: str, agg_pipeline: L
     return df
 
 
+def get_primary_native_host_n_port_from_config_dict(primary_config_dict: Dict,
+                                                    project_data_dir_path: PurePath) -> Tuple[str, int]:
+    primary_server_port = primary_config_dict.get("main_server_beanie_port")
+    if primary_server_port is None:
+        err_str = "Could not find 'main_server_beanie_port' key in project's primary config yaml"
+        logging.exception(err_str)
+        raise Exception(err_str)
+
+    config_yaml_name = f"server_{primary_server_port}_config.yaml"
+    config_yaml_path = project_data_dir_path / config_yaml_name
+    if os.path.exists(config_yaml_path):
+        config_dict = YAMLConfigurationManager.load_yaml_configurations(str(config_yaml_path))
+        return get_native_host_n_port_from_config_dict(config_dict)
+    else:
+        err_str = f"server_{primary_server_port}_config.yaml doesn't exist"
+        logging.exception(err_str)
+        raise Exception(err_str)
+
+
 def get_native_host_n_port_from_config_dict(config_dict: Dict) -> Tuple[str, int]:
     cache_override_type = config_dict.get("cache_override_type")
 
@@ -1000,3 +1022,8 @@ async def execute_tasks_list_with_first_completed(tasks_list: List[asyncio.Task]
             except Exception as e:
                 logging.debug('\n', f"execute_tasks_list_with_first_completed failed for task "
                                     f"{completed_task.get_name()};;; Exception: {e}")
+
+
+def get_symbol_side_key(symbol_side_tuple_list: List[Tuple[str, str]]) -> str:
+    key_str = ",".join([f"symbol-side={symbol}-{side}" for symbol, side in symbol_side_tuple_list])
+    return f"%%{key_str}%%"

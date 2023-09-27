@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from pendulum import DateTime, parse
 
 # project imports
-from FluxPythonUtils.scripts.utility_functions import parse_to_float, get_native_host_n_port_from_config_dict
+from FluxPythonUtils.scripts.utility_functions import parse_to_float
 
 perf_benchmark_log_prefix_regex_pattern: str = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} : (" \
                                                r"TIMING) : \[[a-zA-Z._]* : \d*] : "

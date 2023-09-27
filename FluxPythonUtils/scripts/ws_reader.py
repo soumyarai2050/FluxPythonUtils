@@ -1,13 +1,14 @@
 import os
 import sys
 import time
-from typing import Type, Callable, ClassVar, List
+from typing import Type, Callable, ClassVar, List, Dict
 import websockets
 from websockets.exceptions import ConnectionClosedOK, ConnectionClosedError, ConnectionClosed
 import asyncio
 import json
 import logging
 from threading import RLock
+import urllib.parse
 
 os.environ["DBType"] = "beanie"
 
@@ -43,8 +44,12 @@ class WSReader:
 
     # callable accepts List of PydanticClassType or None; None implies WS connection closed
     def __init__(self, uri: str, PydanticClassType: Type, PydanticClassTypeList: Type, callback: Callable,
-                 notify: bool = True):
-        self.uri = uri
+                 query_kwargs: Dict | None = None, notify: bool = True):
+        if query_kwargs is None:
+            self.uri = uri
+        else:
+            # Adding kwargs as query params in uri
+            self.uri = uri + "?" + urllib.parse.urlencode(query_kwargs)
         self.PydanticClassType: Type = PydanticClassType
         self.PydanticClassTypeList = PydanticClassTypeList
         self.callback = callback
@@ -53,6 +58,8 @@ class WSReader:
         self.single_obj_lock = RLock()
         self.notify = notify
         self.force_disconnected = False
+
+    def register_to_run(self):
         WSReader.ws_cont_list.append(self)
 
     @staticmethod
