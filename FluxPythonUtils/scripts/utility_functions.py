@@ -6,6 +6,7 @@ import pickle
 import re
 import threading
 from typing import List, Dict, TypeVar, Callable, Tuple, Type, Set
+import sys
 
 import pandas
 import yaml
@@ -847,6 +848,18 @@ def get_version_from_mongodb_uri(mongo_server_uri: str) -> str:
     return client.server_info().get("version")
 
 
+def check_db_exist_from_mongodb_uri(mongo_server_uri: str, check_db_name: str) -> bool:
+    client = MongoClient(mongo_server_uri)
+    if check_db_name in client.list_database_names():
+        return True
+    return False
+
+
+def get_mongo_db_list(mongo_server_uri: str) -> List[str]:
+    client = MongoClient(mongo_server_uri)
+    return client.list_database_names()
+
+
 def get_time_it_log_pattern(callable_name: str, start_time: DateTime, delta: float):
     pattern_str = f"_timeit_{callable_name}~{start_time}~{delta}_timeit_"
     return pattern_str
@@ -1027,3 +1040,24 @@ async def execute_tasks_list_with_first_completed(tasks_list: List[asyncio.Task]
 def get_symbol_side_key(symbol_side_tuple_list: List[Tuple[str, str]]) -> str:
     key_str = ",".join([f"symbol-side={symbol}-{side}" for symbol, side in symbol_side_tuple_list])
     return f"%%{key_str}%%"
+
+
+def except_n_log_alert():
+    def decorator_function(original_function):
+        def wrapper_function(*args, **kwargs):
+            result = None
+            try:
+                result = original_function(*args, **kwargs)
+            except Exception as e:
+                exc_type, exc_obj, exc_tb = sys.exc_info()
+                filename = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
+                alert_brief: str = f"exception: {e} while attempting {original_function.__name__}, " \
+                                   f"date-time: {DateTime.now()}"
+                alert_details: str = f"{exc_type}: file: {filename}, line: {exc_tb.tb_lineno}, args: {args}, " \
+                                     f"kwargs: {kwargs}"
+                logging.error(f"{alert_brief};;; {alert_details}")
+            return result
+
+        return wrapper_function
+
+    return decorator_function

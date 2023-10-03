@@ -10,7 +10,7 @@ def http_except_n_log_error(status_code: int = 500):  # 500 - internal server er
                 result = original_function(*args, **kwargs)
             except HTTPException as http_e:
                 logging.exception(http_e)
-                raise http_e
+                raise HTTPException(status_code=status_code, detail=str(http_e))
             except Exception as e:
                 logging.exception(e)
                 raise HTTPException(status_code=status_code, detail=str(e))

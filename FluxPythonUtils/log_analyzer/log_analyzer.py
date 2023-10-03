@@ -1,4 +1,5 @@
 # standard imports
+import datetime
 import logging
 import os
 import sys
@@ -18,7 +19,7 @@ from pydantic import BaseModel
 from pendulum import DateTime, parse
 
 # project imports
-from FluxPythonUtils.scripts.utility_functions import parse_to_float
+from FluxPythonUtils.scripts.utility_functions import parse_to_float, parse_to_int
 
 perf_benchmark_log_prefix_regex_pattern: str = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} : (" \
                                                r"TIMING) : \[[a-zA-Z._]* : \d*] : "
@@ -74,8 +75,8 @@ class LogAnalyzer(ABC):
         self.running_log_analyzer_thread_list: List[Thread] = []
         self.running_pattern_to_file_name_dict: Dict[str, str] = {}
         self.raw_performance_data_queue: queue.Queue = queue.Queue()
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
+        # signal.signal(signal.SIGINT, self._signal_handler)
+        # signal.signal(signal.SIGTERM, self._signal_handler)
 
         # running thread to load log_analyzers dynamically based on entries in log_details_queue
         dynamic_start_log_analyzer_for_log_details_thread: Thread = (
@@ -88,7 +89,7 @@ class LogAnalyzer(ABC):
 
     @staticmethod
     def queue_handler(queue_obj: queue.Queue, bulk_transactions_counts_per_call: int,
-                      bulk_transaction_timeout: int, web_client_callable):
+                      bulk_transaction_timeout: int, web_client_callable, err_handling_callable):
         pydantic_obj_list = []
         oldest_entry_time: DateTime = DateTime.utcnow()
         while True:
@@ -112,7 +113,31 @@ class LogAnalyzer(ABC):
             # since bulk update remaining timeout limit <= 0, will call update
 
             if pydantic_obj_list:
-                web_client_callable(pydantic_obj_list)
+                try:
+                    web_client_callable(pydantic_obj_list)
+                except Exception as e:
+                    # Handling patch-all race-condition if some obj got removed before getting updated due to wait
+
+                    pattern = "'.*objects with ids: {(.*)} out of requested .*'"
+                    match_list: List[str] = re.findall(pattern, str(e))
+                    if match_list:
+                        # taking first occurrence
+                        non_existing_id_list: List[int] = [parse_to_int(_id.strip())
+                                                           for _id in match_list[0].split(",")]
+                        non_existing_obj = []
+                        for pydantic_obj in pydantic_obj_list:
+                            print(f"### {pydantic_obj.get('_id')}", f"in {non_existing_id_list}")
+                            if pydantic_obj.get("_id") in non_existing_id_list:
+                                non_existing_obj.append(pydantic_obj)
+                            else:
+                                queue_obj.put(pydantic_obj)     # putting back all other existing jsons
+                        logging.debug(f"Calling Error handler func provided with param: {non_existing_obj}")
+                        err_handling_callable(non_existing_obj)
+
+                    else:
+                        logging.error(f"Some Error Occurred while calling {web_client_callable}, "
+                                      f"sending all updates to err_handling_callable")
+                        err_handling_callable(pydantic_obj_list)
                 pydantic_obj_list.clear()  # cleaning list to start fresh cycle
             oldest_entry_time = DateTime.utcnow()
             # else not required since even after timeout no data found
@@ -174,9 +199,12 @@ class LogAnalyzer(ABC):
     def dynamic_start_log_analyzer_for_log_details(self):
         while self.run_mode:
             log_detail = self.log_details_queue.get()   # blocking call
-            new_thread = Thread(target=self._listen, args=(log_detail,))
+            new_thread = Thread(target=self._listen, args=(log_detail,), daemon=True)
             self.running_log_analyzer_thread_list.append(new_thread)
             new_thread.start()
+
+    def handle_raw_performance_data_queue_err_handler(self):
+        pass
 
     def _handle_raw_performance_data_queue(self):
         raw_performance_data_bulk_create_counts_per_call, raw_perf_data_bulk_create_timeout = (
@@ -184,7 +212,8 @@ class LogAnalyzer(ABC):
         LogAnalyzer.queue_handler(
             self.raw_performance_data_queue, raw_performance_data_bulk_create_counts_per_call,
             raw_perf_data_bulk_create_timeout,
-            self.webclient_object.create_all_raw_performance_data_client)
+            self.webclient_object.create_all_raw_performance_data_client,
+            self.handle_raw_performance_data_queue_err_handler)
 
     def _load_regex_list(self) -> None:
         if os.path.exists(self.regex_file):
@@ -216,21 +245,21 @@ class LogAnalyzer(ABC):
             # else not required if both regex file is not present and regex list is empty. returning False
             return False
 
-    def _signal_handler(self, signal_type: int, *args) -> None:
-        logging.warning(f"{signal.Signals(signal_type).name} received. Gracefully terminating all subprocess.")
-        if not self.run_mode:
-            logging.warning("run_mode already set to False. ignoring")
-            sys.exit(0)
-        logging.info("Setting run_mode to False")
-        self.run_mode = False
-
-        for thread in self.running_log_analyzer_thread_list:
-            thread.join()
-
-        for process in self.process_list:
-            process.kill()
-        self.process_list.clear()
-        sys.exit(0)
+    # def _signal_handler(self, signal_type: int, *args) -> None:
+    #     logging.warning(f"{signal.Signals(signal_type).name} received. Gracefully terminating all subprocess.")
+    #     if not self.run_mode:
+    #         logging.warning("run_mode already set to False. ignoring")
+    #         sys.exit(0)
+    #     logging.info("Setting run_mode to False")
+    #     self.run_mode = False
+    #
+    #     for thread in self.running_log_analyzer_thread_list:
+    #         thread.join()
+    #
+    #     for process in self.process_list:
+    #         process.kill()
+    #     self.process_list.clear()
+    #     sys.exit(0)
 
     def _listen(self, log_detail: LogDetail) -> None:
         thread: Thread = current_thread()
@@ -310,6 +339,9 @@ class LogAnalyzer(ABC):
                     log_prefix, log_message = \
                         self._get_log_prefix_n_message(log_line=line,
                                                        log_prefix_pattern=log_prefix_regex_pattern)
+
+                    d = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
                     regex_match: bool = False
                     for regex_pattern in self.regex_list:
                         if re.compile(fr"{regex_pattern}").search(log_message):
@@ -331,9 +363,9 @@ class LogAnalyzer(ABC):
 
             except Exception as e:
                 logging.exception(f"_analyze_log failed;;; exception: {e}")
-                with self.signal_handler_lock:
-                    if self.run_mode:
-                        self._signal_handler(signal.Signals.SIGTERM)
+                # with self.signal_handler_lock:
+                #     if self.run_mode:
+                        # self._signal_handler(signal.Signals.SIGTERM)
 
     def _truncate_str(self, text: str, max_size_in_bytes: int = 2048) -> str:
         if len(text.encode("utf-8")) > max_size_in_bytes:
