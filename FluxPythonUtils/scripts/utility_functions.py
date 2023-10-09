@@ -7,6 +7,8 @@ import re
 import threading
 from typing import List, Dict, TypeVar, Callable, Tuple, Type, Set
 import sys
+import socket
+from contextlib import closing
 
 import pandas
 import yaml
@@ -1061,3 +1063,16 @@ def except_n_log_alert():
         return wrapper_function
 
     return decorator_function
+
+
+def find_free_port():
+    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
+        s.bind(('', 0))
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        return s.getsockname()[1]
+
+
+def clear_semaphore(semaphore_obj: threading.Semaphore):
+    while 1:
+        if not semaphore_obj.acquire(blocking=False):
+            break

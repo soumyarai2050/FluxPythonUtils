@@ -126,7 +126,6 @@ class LogAnalyzer(ABC):
                                                            for _id in match_list[0].split(",")]
                         non_existing_obj = []
                         for pydantic_obj in pydantic_obj_list:
-                            print(f"### {pydantic_obj.get('_id')}", f"in {non_existing_id_list}")
                             if pydantic_obj.get("_id") in non_existing_id_list:
                                 non_existing_obj.append(pydantic_obj)
                             else:
