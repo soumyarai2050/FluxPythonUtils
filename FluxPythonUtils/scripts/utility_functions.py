@@ -1,16 +1,21 @@
 # Standard imports
 import asyncio
+import copy
+import inspect
+import math
 import os
 import logging
 import pickle
 import re
 import threading
-from typing import List, Dict, TypeVar, Callable, Tuple, Type, Set
+import time
+from typing import List, Dict, TypeVar, Callable, Tuple, Type, Set, Any, Iterable
 import sys
 import socket
 from contextlib import closing
 
 import pandas
+import pexpect
 import yaml
 from enum import IntEnum
 import json
@@ -18,9 +23,11 @@ from pathlib import PurePath, Path
 import csv
 from websockets.exceptions import ConnectionClosedOK, ConnectionClosedError, ConnectionClosed
 from requests import Response
-from datetime import datetime
+from datetime import datetime, timedelta
 import timeit
 import functools
+import psutil
+import shutil
 
 # 3rd party packages
 from pydantic import BaseModel
@@ -29,6 +36,8 @@ from pymongo import MongoClient
 import pymongoarrow.monkey
 from beanie.odm.documents import DocType
 from pendulum import DateTime
+from fastapi import WebSocket
+from fastapi import HTTPException
 
 # FluxPythonUtils Modules
 from FluxPythonUtils.scripts.yaml_importer import YAMLImporter
@@ -156,6 +165,25 @@ def handle_http_response_extended(response: Response):
     return response.status_code, None
 
 
+def csv_to_xlsx(file_name: str, csv_data_dir: PurePath | None = None, xlsx_data_dir: PurePath | None = None):
+    if csv_data_dir is None:
+        csv_data_dir = PurePath(__file__).parent / "data"
+    if xlsx_data_dir is None:
+        xlsx_data_dir = csv_data_dir
+    csv_path = PurePath(csv_data_dir / f"{file_name}.csv")
+    xlsx_path = PurePath(xlsx_data_dir / f"{file_name}.xlsx")
+    csv_as_df = pd.read_csv(str(csv_path))
+    xlsx_writer = pd.ExcelWriter(str(xlsx_path))
+    csv_as_df.to_excel(xlsx_writer, index=False, header=True, sheet_name="target")
+    xlsx_writer.close()
+
+
+def dict_or_list_records_csv_writer_ext(file_name: str, records: Dict | List, record_type,
+                                        data_dir: PurePath | None = None):
+    fieldnames = record_type.schema()["properties"].keys()
+    dict_or_list_records_csv_writer(file_name, records, fieldnames, record_type, data_dir)
+
+
 def dict_or_list_records_csv_writer(file_name: str, records: Dict | List, fieldnames, record_type,
                                     data_dir: PurePath | None = None):
     """
@@ -183,27 +211,57 @@ def dict_or_list_records_csv_writer(file_name: str, records: Dict | List, fieldn
                 f"object: {str(records)}")
 
 
-def dict_or_list_records_csv_reader(file_name: str, PydanticType: BaseModelOrItsDerivedType,
-                                    data_dir: PurePath | None = None) \
-        -> List[BaseModel]:
-    """
-    At this time the method only supports list of pydantic_type extraction form csv
-    """
+def get_csv_path_from_name_n_dir(file_name: str, data_dir: PurePath | None = None):
+    if data_dir is None:
+        data_dir = PurePath(__file__).parent / "data"
+    return PurePath(data_dir / f"{file_name}.csv")
 
+
+def pandas_df_to_pydantic_obj_list(read_df, PydanticType: BaseModelOrItsDerivedType,
+                                   rename_col_names_to_snake_case: bool = False,
+                                   rename_col_names_to_lower_case: bool = True):
     class PydanticClassTypeList(BaseModel):
         __root__: List[PydanticType]
 
-    if data_dir is None:
-        data_dir = PurePath(__file__).parent / "data"
-    csv_path = PurePath(data_dir / f"{file_name}.csv")
-    if os.path.getsize(str(csv_path)) > 0:
-        read_df = pd.read_csv(csv_path, keep_default_na=False)
+    if rename_col_names_to_snake_case:
+        # replace any space in col name with _ and convert name to snake_case
+        col_names: List[str] = read_df.columns.tolist()
+        old_to_new_col_name_dict: Dict[str, str] = {}
+        for col_name in col_names:
+            orig_col_name: str = copy.deepcopy(col_name)
+            col_name = col_name.replace('/', '')
+            col_name = col_name.replace(' ', '')
+            col_name = col_name.replace('(', '')
+            col_name = col_name.replace(')', '')
+            new_col_name: str = convert_camel_case_to_specific_case(col_name, lower_case=rename_col_names_to_lower_case)
+            old_to_new_col_name_dict[orig_col_name] = new_col_name
+        read_df.rename(columns=old_to_new_col_name_dict, inplace=True)
         data_dict_list = read_df.to_dict(orient='records')
         record_dict = {"__root__": data_dict_list}
         pydantic_obj_list: PydanticClassTypeList = PydanticClassTypeList(**record_dict)
         return pydantic_obj_list.__root__
-    else:
-        raise Exception(f"dict_or_list_records_csv_reader invoked on empty csv file: {str(csv_path)}")
+
+
+def dict_or_list_records_csv_reader(file_name: str, PydanticType: BaseModelOrItsDerivedType,
+                                    data_dir: PurePath | None = None, rename_col_names_to_snake_case: bool = False,
+                                    rename_col_names_to_lower_case: bool = True,
+                                    no_throw: bool = False) -> List[BaseModel]:
+    """
+    At this time the method only supports list of pydantic_type extraction form csv
+    """
+    if data_dir is None:
+        data_dir = PurePath(__file__).parent / "data"
+    if not file_name.endswith(".csv"):
+        file_name = f"{file_name}.csv"
+    csv_path = data_dir / file_name
+    str_csv_path = str(csv_path)
+    if os.path.exists(str_csv_path) and os.path.getsize(str(str_csv_path)) > 0:
+        read_df = pd.read_csv(csv_path, keep_default_na=False)
+        return pandas_df_to_pydantic_obj_list(read_df, PydanticType, rename_col_names_to_snake_case,
+                                              rename_col_names_to_lower_case)
+    elif not no_throw:
+        raise Exception(f"dict_or_list_records_csv_reader invoked on empty or no csv file: {str(csv_path)}")
+    return []
 
 
 def str_from_file(file_path: str) -> str:
@@ -233,6 +291,53 @@ def store_json_str_to_file(file_name: str, json_str, data_dir: PurePath | None =
     json_file_path = PurePath(data_dir / f"{file_name}.json")
     with open(json_file_path, mode) as outfile:
         outfile.write(json_str)
+
+
+def store_str_list_to_file(file_name: str, str_list: List[str], data_dir: PurePath | None = None, no_ext: bool = True,
+                           mode="w", separator="\n"):
+    if data_dir is None:
+        data_dir = PurePath(__file__).parent / "data"
+    file_path: PurePath
+    if no_ext:
+        file_path = PurePath(data_dir / f"{file_name}")
+    else:
+        file_path = PurePath(data_dir / f"{file_name}.txt")
+
+    with open(file_path, mode) as outfile:
+        str_: str
+        for str_ in str_list:
+            outfile.write(str_ + separator)
+
+
+def scp_handler(scp_src_path: PurePath, scp_src_user, scp_src_server, scp_dest_dir: PurePath, scp_password: str) -> bool:
+    scp_command = f"scp -q {scp_src_user}@{scp_src_server}:{scp_src_path} {scp_dest_dir}/."
+    expect_ = "password:"
+    if not pexpect_command_expect_response_handler(scp_command, expect_, scp_password):
+        logging.error(f"scp_command failed: likely key error or connection timeout, try cmd manually once - happens "
+                      f"once for new cert new server, cmd: {scp_command}")
+        return False
+    return True  # TODO: needs improvement - failures also report True it appears
+
+
+def pexpect_command_expect_response_handler(command_: str, expect_: str, response_: str) -> int:
+    retval: bool = False
+    try:
+        handler = pexpect.spawn(command_)
+        i = handler.expect([expect_, pexpect.EOF])
+        if i == 0:  # all good send password
+            handler.sendline(response_)
+            handler.expect(pexpect.EOF)
+            retval = True
+        elif i == 1:
+            logging.error(f"pexpect_command_expect_response_handler failed, try cmd manually cmd: {command_}")
+        else:
+            logging.error(f"pexpect_command_expect_response_handler: unexpected expect() returned: {i} for cmd "
+                          f"response of: {command_}, expected 0 or 1")
+        handler.close()
+        return retval
+    except Exception as e:
+        logging.exception(f"pexpect_scp_handler: failed for cmd: {command_}, exception: {e}")
+        return retval
 
 
 def load_json_dict_from_file(file_name: str, data_dir: PurePath | None = None, must_exist: bool = True):
@@ -339,12 +444,29 @@ def file_exist(path: str) -> bool:
     return os.path.exists(path)
 
 
+def is_file_updated(file_to_check: Path, last_read_ts = None):
+    if file_to_check.is_file():
+        file_to_check = file_to_check.resolve()
+        # get modification time
+        last_mod_timestamp = file_to_check.stat().st_mtime
+        if not last_read_ts:
+            return last_mod_timestamp
+        # convert timestamp into DateTime object
+        # last_mod_timestamp = datetime.datetime.fromtimestamp(last_mod_timestamp)
+        if last_mod_timestamp > last_read_ts:
+            return last_mod_timestamp
+        # else return last_read_ts (same as in final else return)
+    # all else return last_read_ts
+    return last_read_ts
+
+
 def configure_logger(level: str | int, log_file_dir_path: str | None = None, log_file_name: str | None = None) -> None:
     """
     Function to config the logger in your trigger script of your project, creates log file in given log_dir_path.
     Takes project_name as parameter to fetch Level from configurations.py.
     """
     if log_file_name is None:
+        # TODO LAZY: rename default log file name to "holder_dir_name.log"
         log_file_name = "logs.log"
     # else not required: if file exists then using that name
 
@@ -645,6 +767,20 @@ def convert_to_capitalized_camel_case(value: str) -> str:
     return value_camel_cased[0].upper() + value_camel_cased[1:]
 
 
+def update_bucketed_list(bucket_size: int, records_in: List[Any] | Iterable[Any],
+                         bucketed_records_list_out: List[List[Any]]) -> None:
+    records: List[Any] | None = None
+    for idx, record in enumerate(records_in):
+        if idx % bucket_size == 0:
+            if records:
+                bucketed_records_list_out.append(records)
+            records = [record]
+        else:
+            records.append(record)
+    if records:
+        bucketed_records_list_out.append(records)
+
+
 def avg_of_new_val_sum_to_avg(avg: int | float, new_val: int | float, total_length: int) -> int | float:
     """
     Computes average of, average of n numbers + n+1 number
@@ -833,6 +969,18 @@ def drop_mongo_collections(mongo_server_uri: str, database_name: str, ignore_col
         collection.drop()
 
 
+def drop_mongo_database(mongo_server_uri: str, database_name: str) -> None:
+    """
+    Drops mongo database
+    :param mongo_server_uri: Mongo Server that requires Cleaning
+    :param database_name: Name of db
+    :return: None
+    """
+    client = MongoClient(mongo_server_uri)
+    db = client.get_database(database_name)
+    db.command("dropDatabase")
+
+
 def clean_mongo_collections(mongo_server_uri: str, database_name: str, ignore_collections: List[str] | None = None) -> None:
     """
     Cleans all collections (deletes all documents) present in collections except ``ignore_collections``
@@ -860,6 +1008,50 @@ def check_db_exist_from_mongodb_uri(mongo_server_uri: str, check_db_name: str) -
 def get_mongo_db_list(mongo_server_uri: str) -> List[str]:
     client = MongoClient(mongo_server_uri)
     return client.list_database_names()
+
+
+def get_immediate_prev_weekday(any_date: datetime = datetime.now()) -> datetime:
+    """
+    iso-weekday 1 == Monday ;; 7 == SUNDAY
+    only skips standard weekends [Sat/Sun], holidays not accounted [country specific holidays should be added on top
+    separately by caller if desired ]
+    """
+    prev_day_offset: int = 1
+    if any_date.isoweekday() == 1:
+        prev_day_offset = 3
+    elif any_date.isoweekday() == 7:
+        prev_day_offset = 7
+    any_date -= timedelta(days=prev_day_offset)
+    return any_date
+
+
+def get_immediate_next_weekday(any_date: datetime = datetime.now()) -> datetime:
+    """
+    iso-weekday 1 == Monday ;; 7 == SUNDAY
+    only skips standard weekends [Sat/Sun], holidays not accounted [country specific holidays should be added on top
+    separately by caller if desired ]
+    """
+    next_day_offset: int = 1
+    if any_date.isoweekday() == 5:
+        next_day_offset = 3
+    elif any_date.isoweekday() == 6:
+        next_day_offset = 2
+    any_date += timedelta(days=next_day_offset)
+    return any_date
+
+
+def year_month_day_str_from_datetime(any_date: datetime = datetime.now()) -> Tuple[str | None, str | None, str | None]:
+    if any_date:
+        year_str: str = str(any_date.year)
+        month_str: str = str(any_date.month)
+        if len(month_str) == 1:
+            month_str = "0" + month_str
+        day_str: str = str(any_date.day)
+        if len(day_str) == 1:
+            day_str = "0" + day_str
+        return year_str, month_str, day_str
+    else:
+        return None, None, None
 
 
 def get_time_it_log_pattern(callable_name: str, start_time: DateTime, delta: float):
@@ -971,7 +1163,7 @@ def get_native_host_n_port_from_config_dict(config_dict: Dict) -> Tuple[str, int
 
 
 async def execute_tasks_list_with_all_completed(tasks_list: List[asyncio.Task],
-                                                pydantic_class_type: Type[DocType] | Type[BaseModel],
+                                                pydantic_class_type: Type[DocType] | Type[BaseModel] | None = None,
                                                 timeout: float = 20.0):
     pending_tasks: Set[asyncio.Task] | None = None
     completed_tasks: Set[asyncio.Task] | None = None
@@ -983,8 +1175,10 @@ async def execute_tasks_list_with_all_completed(tasks_list: List[asyncio.Task],
         except Exception as e:
             logging.exception(f"await asyncio.wait raised exception: {e}")
     else:
-        logging.debug("unexpected: Called execute_tasks_list_with_all_completed with empty tasks_list for model: "
-                      f"{pydantic_class_type.__name__}")
+        debug_str = "unexpected: Called execute_tasks_list_with_all_completed with empty tasks_list"
+        if pydantic_class_type is not None:
+            debug_str += f" for model: {pydantic_class_type.__name__}"
+        logging.debug(debug_str)
 
     if not completed_tasks:
         if pending_tasks:
@@ -1076,3 +1270,58 @@ def clear_semaphore(semaphore_obj: threading.Semaphore):
     while 1:
         if not semaphore_obj.acquire(blocking=False):
             break
+
+
+async def handle_ws(ws: WebSocket, is_new_ws: bool):
+    need_disconnect = False
+    if is_new_ws:
+        while True:
+            json_data = await ws.receive()  # {"type": "websocket.disconnect", "code": exc.code}
+            if json_data["type"] == "websocket.disconnect":
+                need_disconnect = True
+                break
+            else:
+                logging.error(
+                    f"Unexpected! WS client send data to server (ignoring) where none is expected, data: {json_data}")
+                continue
+    # else not required - some other path has invoked the websocket.receive(), we can ignore
+    return need_disconnect
+
+
+def get_cpu_usage() -> None:
+    cpu_usage = psutil.cpu_percent(interval=10)
+    logging.info(f"cpu usage in percent: {cpu_usage}")
+    if cpu_usage > 90:
+        logging.error(f"cpu usage exceeded 90%. current cpu usage: {cpu_usage}")
+    elif cpu_usage > 70:
+        logging.warning(f"cpu usage exceeded 70%. current cpu usage: {cpu_usage}")
+
+
+def get_ram_memory_usage() -> None:
+    virtual_memory_details = psutil.virtual_memory()
+    total_memory = virtual_memory_details[0]
+    available_memory = virtual_memory_details[1]
+    used_memory = ((total_memory - available_memory) / total_memory) * 100
+    logging.info(f"ram memory usage in percent: {used_memory}")
+    if used_memory > 90:
+        logging.error(f"ram memory usage exceeded 90%. current ram usage: {used_memory}")
+    elif used_memory > 70:
+        logging.warning(f"ram memory usage exceeded 70%. current ram usage: {used_memory}")
+
+
+def get_disk_usage(locations: List[str] | None = None) -> None:
+    if locations is None:
+        partitions = psutil.disk_partitions(True)
+        locations = [part.mountpoint for part in partitions]
+    for loc in locations:
+        usage_stats = shutil.disk_usage(loc)
+        total_memory = usage_stats[0]
+        if math.isclose(total_memory, 0):
+            logging.warning(f"disk total memory is 0 for mount location: {loc}")
+            continue
+        used_memory = (usage_stats[1] / total_memory) * 100
+        logging.info(f"disk usage un percent for location {loc}: {used_memory}")
+        if used_memory > 90:
+            logging.error(f"disk usage exceeded 90% for location {loc}. current disk usage: {used_memory}")
+        elif used_memory > 70:
+            logging.warning(f"disk usage exceeded 70% for location {loc}. current disk usage: {used_memory}")

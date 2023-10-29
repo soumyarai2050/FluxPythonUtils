@@ -338,9 +338,6 @@ class LogAnalyzer(ABC):
                     log_prefix, log_message = \
                         self._get_log_prefix_n_message(log_line=line,
                                                        log_prefix_pattern=log_prefix_regex_pattern)
-
-                    d = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
                     regex_match: bool = False
                     for regex_pattern in self.regex_list:
                         if re.compile(fr"{regex_pattern}").search(log_message):
