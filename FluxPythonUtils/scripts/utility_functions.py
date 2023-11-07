@@ -9,11 +9,10 @@ import pickle
 import re
 import threading
 import time
-from typing import List, Dict, TypeVar, Callable, Tuple, Type, Set, Any, Iterable
+from typing import List, Dict, TypeVar, Callable, Tuple, Type, Set, Any, Iterable, Final
 import sys
 import socket
 from contextlib import closing
-
 import pandas
 import pexpect
 import yaml
@@ -460,6 +459,8 @@ def is_file_updated(file_to_check: Path, last_read_ts = None):
     return last_read_ts
 
 
+LOG_FORMAT: Final[str] = "%(asctime)s : %(levelname)s : [%(filename)s : %(lineno)d] : %(message)s"
+
 def configure_logger(level: str | int, log_file_dir_path: str | None = None, log_file_name: str | None = None) -> None:
     """
     Function to config the logger in your trigger script of your project, creates log file in given log_dir_path.
@@ -515,7 +516,7 @@ def configure_logger(level: str | int, log_file_dir_path: str | None = None, log
     logging.basicConfig(
         filename=log_file_path,
         level=level,
-        format="%(asctime)s : %(levelname)s : [%(filename)s : %(lineno)d] : %(message)s",
+        format=LOG_FORMAT,
         force=True
     )
 
@@ -589,6 +590,26 @@ def add_logging_levels(log_lvl_to_log_value_dict_list: List[Dict[str, int]]):
 
 def set_logger_level(log_level: str):
     logging.getLogger().setLevel(log_level)
+
+
+def _get_file_handler(log_file_path: str):
+    if file_exist(log_file_path):
+        datetime_str: str = datetime.now().strftime("%Y%m%d.%H%M%S")
+        os.rename(log_file_path, f"{log_file_path}.{datetime_str}")
+    file_handler = logging.FileHandler(log_file_path)
+    file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
+    return file_handler
+
+
+def create_logger(logger_name: str, log_lvl: int | str, log_file_path: str) -> logging.Logger:
+    logger: logging.Logger = logging.getLogger(logger_name)
+    logger.setLevel(log_lvl)  # better to have too much log than not enough
+    logger.addHandler(_get_file_handler(log_file_path))
+    # the Logger class has a propagate attribute that controls whether log messages are propagated
+    # to parent loggers. The default value of propagate is True, which means that log messages are propagated
+    # up the logger hierarchy until they reach the root logger
+    logger.propagate = False
+    return logger
 
 
 def filter_keywords(filter_str: str, keywords_list: List[str]) -> bool:
@@ -856,7 +877,16 @@ def compare_n_patch_list(stored_list: List, updated_list: List):
                         if (updated_id := update_dict.get("_id")) is not None:
                             # If id is new then appending update_dict to main list
                             if updated_id not in stored_id_idx_dict:
-                                stored_list.append(update_dict)
+                                # If update_dict only has id and the id is not in stored_list - avoid append
+                                # Update list has id checked above + len == 1 confirms all it has is id
+                                if len(update_dict) == 1:
+                                    err_str = ("repeated update obj only has id and that id value is not found in any "
+                                               f"existing repeated objects - ignoring this update, "
+                                               f"update object: {update_dict}")
+                                    logging.exception(err_str)
+                                    raise Exception(err_str)
+                                else:
+                                    stored_list.append(update_dict)
                             else:
                                 stored_index = stored_id_idx_dict[updated_id]
                                 # If update_dict only has id and the id is same as in stored_list - delete entry

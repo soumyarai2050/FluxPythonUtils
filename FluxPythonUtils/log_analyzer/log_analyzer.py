@@ -49,7 +49,7 @@ class LogDetail(BaseModel):
 
 class LogAnalyzer(ABC):
 
-    def __init__(self, regex_file: str, config_yaml_dict: Dict, webclient_object,
+    def __init__(self, regex_file: str, config_yaml_dict: Dict, performance_benchmark_webclient_object,
                  raw_performance_data_model_type: Type[BaseModel],
                  log_details: List[LogDetail] | None = None,
                  log_prefix_regex_pattern_to_callable_name_dict: Dict[str, str] | None = None):
@@ -59,7 +59,7 @@ class LogAnalyzer(ABC):
         self.regex_list: List[str] = list()
 
         self.config_yaml_dict: Dict = config_yaml_dict
-        self.webclient_object = webclient_object
+        self.webclient_object = performance_benchmark_webclient_object
         self.raw_performance_data_model_type = raw_performance_data_model_type
         self.log_details: List[LogDetail] | None = log_details if log_details is not None else []
         self.non_existing_log_details: List[LogDetail] = []
@@ -132,9 +132,12 @@ class LogAnalyzer(ABC):
                                 queue_obj.put(pydantic_obj)     # putting back all other existing jsons
                         logging.debug(f"Calling Error handler func provided with param: {non_existing_obj}")
                         err_handling_callable(non_existing_obj)
-
+                    elif "Failed to establish a new connection: [Errno 111] Connection refused" in str(e):
+                        logging.error(f"Connection Error occurred while calling {web_client_callable.__name__}, "
+                                      f"will stay on wait for 5 secs and again retry - ignoring all data for this call")
+                        time.sleep(5*60)    # 5 minutes
                     else:
-                        logging.error(f"Some Error Occurred while calling {web_client_callable}, "
+                        logging.error(f"Some Error Occurred while calling {web_client_callable.__name__}, "
                                       f"sending all updates to err_handling_callable")
                         err_handling_callable(pydantic_obj_list)
                 pydantic_obj_list.clear()  # cleaning list to start fresh cycle
@@ -391,7 +394,7 @@ class LogAnalyzer(ABC):
                     raw_performance_data_obj.delta = parse_to_float(delta)
 
                     self.raw_performance_data_queue.put(raw_performance_data_obj)
-                    logging.debug(f"Created raw_performance_data in db for callable {callable_name} "
+                    logging.debug(f"Created raw_performance_data entry in queue for callable {callable_name} "
                                   f"with start_datetime {start_time}")
                 # else not required: avoiding callable underlying_create_raw_performance_data to avoid infinite loop
             else:
