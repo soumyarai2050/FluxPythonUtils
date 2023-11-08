@@ -277,6 +277,7 @@ class LogAnalyzer(ABC):
         setattr(thread, "service_detail", log_detail)
         process: subprocess.Popen = subprocess.Popen(['tail', '-F', log_detail.log_file_path], stdout=subprocess.PIPE,
                                                      stderr=subprocess.STDOUT)
+        os.set_blocking(process.stdout.fileno(), False)    # makes stdout.readlines() non-blocking
         # add poll for process stdout for non-blocking tail of log file
         poll: select.poll = select.poll()
         poll.register(process.stdout)
@@ -291,7 +292,7 @@ class LogAnalyzer(ABC):
                                                      stderr=subprocess.STDOUT)
         # add poll for process stdout for non-blocking tail of log file
         poll: select.poll = select.poll()
-        poll.register(process.stdout)
+        poll.register(process.stdout, select.POLLIN)
         self.process_list.append(process)
         return [process, poll]
 
@@ -310,55 +311,64 @@ class LogAnalyzer(ABC):
                     # else not required: last update threshold not breached
                 # else not required: service is not critical. skipping periodic check for new logs
 
-                if poll.poll(1):
-                    line = process.stdout.readline().decode().strip()
-                    if not line:
-                        continue
+                if poll.poll():
+                    lines = process.stdout.readlines()
+
+                    for line in lines:
+                        line = line.decode().strip()
+                        if not line:
+                            continue
+
+                        if line.startswith("tail"):
+                            logging.warning(line)
+
+                        if "tail:" in line and "giving up on this name" in line:
+                            brief_msg_str: str = (f"tail error encountered in log service: {log_detail.service}, "
+                                                  f"restarting...")
+                            logging.critical(f"{brief_msg_str};;;{line}")
+                            self.notify_tail_error_in_log_service(brief_msg_str, line)
+                            process, poll = self._reconnect_process(process=process, log_detail=log_detail)
+                            continue
+
+                        if self.refresh_regex_list():
+                            logging.info(f"suppress alert regex list updated. regex_list: {self.regex_list}")
+
+                        last_update_date_time = DateTime.utcnow()
+                        for log_prefix_regex_pattern, callable_name in (
+                                log_detail.log_prefix_regex_pattern_to_callable_name_dict.items()):
+                            # ignore processing log line that not matches log_prefix_regex_pattern
+                            if not re.compile(log_prefix_regex_pattern).search(line):
+                                continue
+
+                            log_prefix, log_message = \
+                                self._get_log_prefix_n_message(log_line=line,
+                                                               log_prefix_pattern=log_prefix_regex_pattern)
+                            regex_match: bool = False
+                            for regex_pattern in self.regex_list:
+                                try:
+                                    if re.compile(fr"{regex_pattern}").search(log_message):
+                                        logging.info(f"regex pattern matched, skipping;;; log_message: {log_message[:200]}")
+                                        regex_match = True
+                                        break
+                                except re.error as e:
+                                    err_str_ = (f"Failed to compile regex pattern, pattern: {regex_pattern}, "
+                                                f"exception: {e}")
+                                    logging.error(err_str_)
+                            # ignore processing the log line that matches the regex list
+                            if regex_match:
+                                break
+
+                            match_callable: Callable[[...], ...] | None = None
+                            try:
+                                match_callable: Callable = getattr(self, callable_name)
+                            except AttributeError as e:
+                                logging.error(f"Couldn't find callable {callable_name} in inherited log_analyzer, "
+                                              f"exception: {e}, inheriting log_analyzer name: {self.__class__.__name__}")
+                            if match_callable:
+                                match_callable(log_prefix, log_message)
                 else:
-                    time.sleep(0.5)
-                    continue
-
-                if line.startswith("tail"):
-                    logging.warning(line)
-
-                if "tail:" in line and "giving up on this name" in line:
-                    brief_msg_str: str = f"tail error encountered in log service: {log_detail.service}, restarting..."
-                    logging.critical(f"{brief_msg_str};;;{line}")
-                    self.notify_tail_error_in_log_service(brief_msg_str, line)
-                    process, poll = self._reconnect_process(process=process, log_detail=log_detail)
-                    continue
-
-                last_update_date_time = DateTime.utcnow()
-                for log_prefix_regex_pattern, callable_name in (
-                        log_detail.log_prefix_regex_pattern_to_callable_name_dict.items()):
-                    # ignore processing log line that not matches log_prefix_regex_pattern
-                    if not re.compile(log_prefix_regex_pattern).search(line):
-                        continue
-
-                    if self.refresh_regex_list():
-                        logging.info(f"suppress alert regex list updated. regex_list: {self.regex_list}")
-
-                    log_prefix, log_message = \
-                        self._get_log_prefix_n_message(log_line=line,
-                                                       log_prefix_pattern=log_prefix_regex_pattern)
-                    regex_match: bool = False
-                    for regex_pattern in self.regex_list:
-                        if re.compile(fr"{regex_pattern}").search(log_message):
-                            logging.info(f"regex pattern matched, skipping;;; log_message: {log_message[:200]}")
-                            regex_match = True
-                            break
-                    # ignore processing the log line that matches the regex list
-                    if regex_match:
-                        continue
-
-                    match_callable: Callable[[...], ...] | None = None
-                    try:
-                        match_callable: Callable = getattr(self, callable_name)
-                    except AttributeError as e:
-                        logging.error(f"Couldn't find callable {callable_name} in inherited log_analyzer, "
-                                      f"exception: {e}, inheriting log_analyzer name: {self.__class__.__name__}")
-                    if match_callable:
-                        match_callable(log_prefix, log_message)
+                    err_str_ = "Unexpected: Received empty list of tuples from poll.poll()"
+                    logging.error(err_str_)
 
             except Exception as e:
                 logging.exception(f"_analyze_log failed;;; exception: {e}")
