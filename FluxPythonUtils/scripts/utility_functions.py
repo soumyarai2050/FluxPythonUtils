@@ -232,13 +232,16 @@ def pandas_df_to_pydantic_obj_list(read_df, PydanticType: BaseModelOrItsDerivedT
             col_name = col_name.replace(' ', '')
             col_name = col_name.replace('(', '')
             col_name = col_name.replace(')', '')
-            new_col_name: str = convert_camel_case_to_specific_case(col_name, lower_case=rename_col_names_to_lower_case)
+            new_col_name: str = convert_camel_case_to_specific_case(col_name,
+                                                                    lower_case=rename_col_names_to_lower_case)
+            new_col_name.replace(' ', '')
             old_to_new_col_name_dict[orig_col_name] = new_col_name
         read_df.rename(columns=old_to_new_col_name_dict, inplace=True)
-        data_dict_list = read_df.to_dict(orient='records')
-        record_dict = {"__root__": data_dict_list}
-        pydantic_obj_list: PydanticClassTypeList = PydanticClassTypeList(**record_dict)
-        return pydantic_obj_list.__root__
+    read_df = pd.DataFrame(read_df).replace({'': None})
+    data_dict_list = read_df.to_dict(orient='records')
+    record_dict = {"__root__": data_dict_list}
+    pydantic_obj_list: PydanticClassTypeList = PydanticClassTypeList(**record_dict)
+    return pydantic_obj_list.__root__
 
 
 def dict_or_list_records_csv_reader(file_name: str, PydanticType: BaseModelOrItsDerivedType,
@@ -254,7 +257,7 @@ def dict_or_list_records_csv_reader(file_name: str, PydanticType: BaseModelOrIts
         file_name = f"{file_name}.csv"
     csv_path = data_dir / file_name
     str_csv_path = str(csv_path)
-    if os.path.exists(str_csv_path) and os.path.getsize(str(str_csv_path)) > 0:
+    if os.path.exists(str_csv_path) and os.path.getsize(str_csv_path) > 0:
         read_df = pd.read_csv(csv_path, keep_default_na=False)
         return pandas_df_to_pydantic_obj_list(read_df, PydanticType, rename_col_names_to_snake_case,
                                               rename_col_names_to_lower_case)
@@ -328,7 +331,7 @@ def pexpect_command_expect_response_handler(command_: str, expect_: str, respons
             handler.expect(pexpect.EOF)
             retval = True
         elif i == 1:
-            logging.error(f"pexpect_command_expect_response_handler failed, try cmd manually cmd: {command_}")
+            logging.error(f"pexpect_command_expect_response_handler command failed, try cmd manually cmd: {command_}")
         else:
             logging.error(f"pexpect_command_expect_response_handler: unexpected expect() returned: {i} for cmd "
                           f"response of: {command_}, expected 0 or 1")
@@ -443,7 +446,7 @@ def file_exist(path: str) -> bool:
     return os.path.exists(path)
 
 
-def is_file_updated(file_to_check: Path, last_read_ts = None):
+def is_file_updated(file_to_check: Path, last_read_ts=None):
     if file_to_check.is_file():
         file_to_check = file_to_check.resolve()
         # get modification time
@@ -451,7 +454,7 @@ def is_file_updated(file_to_check: Path, last_read_ts = None):
         if not last_read_ts:
             return last_mod_timestamp
         # convert timestamp into DateTime object
-        # last_mod_timestamp = datetime.datetime.fromtimestamp(last_mod_timestamp)
+        # last_mod_datetime = datetime.datetime.fromtimestamp(last_mod_timestamp)
         if last_mod_timestamp > last_read_ts:
             return last_mod_timestamp
         # else return last_read_ts (same as in final else return)
@@ -460,6 +463,7 @@ def is_file_updated(file_to_check: Path, last_read_ts = None):
 
 
 LOG_FORMAT: Final[str] = "%(asctime)s : %(levelname)s : [%(filename)s : %(lineno)d] : %(message)s"
+
 
 def configure_logger(level: str | int, log_file_dir_path: str | None = None, log_file_name: str | None = None) -> None:
     """
@@ -592,19 +596,26 @@ def set_logger_level(log_level: str):
     logging.getLogger().setLevel(log_level)
 
 
-def _get_file_handler(log_file_path: str):
-    if file_exist(log_file_path):
+def _get_file_handler(log_file_dir_path: str, log_file_name: str):
+    if log_file_dir_path is not None:
+        os.makedirs(log_file_dir_path, exist_ok=True)
+    log_file_path_name: str = os.path.join(log_file_dir_path, log_file_name)
+
+    if file_exist(log_file_path_name):
         datetime_str: str = datetime.now().strftime("%Y%m%d.%H%M%S")
-        os.rename(log_file_path, f"{log_file_path}.{datetime_str}")
-    file_handler = logging.FileHandler(log_file_path)
+        os.rename(log_file_path_name, f"{log_file_path_name}.{datetime_str}")
+
+    with open(log_file_path_name, "w+"):
+        pass
+    file_handler = logging.FileHandler(log_file_path_name)
     file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
     return file_handler
 
 
-def create_logger(logger_name: str, log_lvl: int | str, log_file_path: str) -> logging.Logger:
+def create_logger(logger_name: str, log_lvl: int | str, log_file_dir_path: str, log_file_name: str) -> logging.Logger:
     logger: logging.Logger = logging.getLogger(logger_name)
     logger.setLevel(log_lvl)  # better to have too much log than not enough
-    logger.addHandler(_get_file_handler(log_file_path))
+    logger.addHandler(_get_file_handler(log_file_dir_path, log_file_name))
     # the Logger class has a propagate attribute that controls whether log messages are propagated
     # to parent loggers. The default value of propagate is True, which means that log messages are propagated
     # up the logger hierarchy until they reach the root logger
@@ -1043,14 +1054,14 @@ def get_mongo_db_list(mongo_server_uri: str) -> List[str]:
 def get_immediate_prev_weekday(any_date: datetime = datetime.now()) -> datetime:
     """
     iso-weekday 1 == Monday ;; 7 == SUNDAY
-    only skips standard weekends [Sat/Sun], holidays not accounted [country specific holidays should be added on top
+    only skips standard weekends [Sat/Sun], holidays not accounted [ country specific holidays should be added on top
     separately by caller if desired ]
     """
     prev_day_offset: int = 1
     if any_date.isoweekday() == 1:
         prev_day_offset = 3
     elif any_date.isoweekday() == 7:
-        prev_day_offset = 7
+        prev_day_offset = 2
     any_date -= timedelta(days=prev_day_offset)
     return any_date
 
@@ -1058,7 +1069,7 @@ def get_immediate_prev_weekday(any_date: datetime = datetime.now()) -> datetime:
 def get_immediate_next_weekday(any_date: datetime = datetime.now()) -> datetime:
     """
     iso-weekday 1 == Monday ;; 7 == SUNDAY
-    only skips standard weekends [Sat/Sun], holidays not accounted [country specific holidays should be added on top
+    only skips standard weekends [Sat/Sun], holidays not accounted [ country specific holidays should be added on top
     separately by caller if desired ]
     """
     next_day_offset: int = 1
@@ -1283,9 +1294,7 @@ def except_n_log_alert():
                                      f"kwargs: {kwargs}"
                 logging.error(f"{alert_brief};;; {alert_details}")
             return result
-
         return wrapper_function
-
     return decorator_function
 
 
@@ -1350,7 +1359,7 @@ def get_disk_usage(locations: List[str] | None = None) -> None:
             logging.warning(f"disk total memory is 0 for mount location: {loc}")
             continue
         used_memory = (usage_stats[1] / total_memory) * 100
-        logging.info(f"disk usage un percent for location {loc}: {used_memory}")
+        logging.info(f"disk usage in percent for location {loc}: {used_memory}")
         if used_memory > 90:
             logging.error(f"disk usage exceeded 90% for location {loc}. current disk usage: {used_memory}")
         elif used_memory > 70:

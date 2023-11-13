@@ -275,25 +275,25 @@ class LogAnalyzer(ABC):
             "handle_perf_benchmark_matched_log_message"
 
         setattr(thread, "service_detail", log_detail)
-        process: subprocess.Popen = subprocess.Popen(['tail', '-F', log_detail.log_file_path], stdout=subprocess.PIPE,
+        process, poll = self._run_tail_process_n_poll_register(log_detail)
+        last_update_date_time: DateTime = DateTime.utcnow()
+        self._analyze_log(process, poll, log_detail, last_update_date_time)
+
+    def _run_tail_process_n_poll_register(self, log_detail: LogDetail):
+        process: subprocess.Popen = subprocess.Popen(['tail', '-F', log_detail.log_file_path],
+                                                     stdout=subprocess.PIPE,
                                                      stderr=subprocess.STDOUT)
         os.set_blocking(process.stdout.fileno(), False)    # makes stdout.readlines() non-blocking
         # add poll for process stdout for non-blocking tail of log file
         poll: select.poll = select.poll()
         poll.register(process.stdout)
-        last_update_date_time: DateTime = DateTime.utcnow()
         self.process_list.append(process)
-        self._analyze_log(process, poll, log_detail, last_update_date_time)
+        return process, poll
 
     def _reconnect_process(self, process: subprocess.Popen, log_detail: LogDetail) -> List:
         process.kill()
         self.process_list.remove(process)
-        process: subprocess.Popen = subprocess.Popen(['tail', '-F', log_detail.log_file_path], stdout=subprocess.PIPE,
-                                                     stderr=subprocess.STDOUT)
-        # add poll for process stdout for non-blocking tail of log file
-        poll: select.poll = select.poll()
-        poll.register(process.stdout, select.POLLIN)
-        self.process_list.append(process)
+        process, poll = self._run_tail_process_n_poll_register(log_detail)
         return [process, poll]
 
     def _analyze_log(self, process: subprocess.Popen, poll: select.poll, log_detail: LogDetail,

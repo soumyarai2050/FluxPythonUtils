@@ -16,33 +16,33 @@ from FluxPythonUtils.scripts.ws_reader_lite import WSReaderLite
 
 
 class WSReader(WSReaderLite):
-    # shutdown: ClassVar[bool] = True
-    #
-    # @classmethod
-    # def start(cls):
-    #     WSReader.shutdown = False
-    #     try:
-    #         # Start the connection
-    #         loop = None
-    #         if sys.version_info < (3, 10):
-    #             loop = asyncio.get_event_loop()
-    #         else:
-    #             try:
-    #                 loop = asyncio.get_running_loop()
-    #             except RuntimeError:
-    #                 loop = asyncio.new_event_loop()
-    #             asyncio.set_event_loop(loop)
-    #             loop.run_until_complete(cls.ws_client())
-    #     except KeyboardInterrupt:
-    #         pass
-    #
-    # @staticmethod
-    # def stop():
-    #     WSReader.shutdown = True
-    #     # ideally 20 instead of 2 : allows for timeout to notice shutdown is triggered and thread to teardown
-    #     time.sleep(2)
-    #
-    # ws_cont_list: ClassVar[List['WSReader']] = list()
+    shutdown: ClassVar[bool] = True
+
+    @classmethod
+    def start(cls):
+        WSReader.shutdown = False
+        try:
+            # Start the connection
+            loop = None
+            if sys.version_info < (3, 10):
+                loop = asyncio.get_event_loop()
+            else:
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(cls.ws_client())
+        except KeyboardInterrupt:
+            pass
+
+    @staticmethod
+    def stop():
+        WSReader.shutdown = True
+        # ideally 20 instead of 2 : allows for timeout to notice shutdown is triggered and thread to teardown
+        time.sleep(2)
+
+    ws_cont_list: ClassVar[List['WSReader']] = list()
 
     # callable accepts List of PydanticClassType or None; None implies WS connection closed
     def __init__(self, uri: str, PydanticClassType: Type, PydanticClassTypeList: Type, callback: Callable,
@@ -51,9 +51,9 @@ class WSReader(WSReaderLite):
         self.PydanticClassType: Type = PydanticClassType
         self.PydanticClassTypeList = PydanticClassTypeList
         self.notify = notify
-    #
-    # def register_to_run(self):
-    #     WSReader.ws_cont_list.append(self)
+
+    def register_to_run(self):
+        WSReader.ws_cont_list.append(self)
 
     @staticmethod
     def read_pydantic_obj_list(json_data, PydanticClassListType):
@@ -75,14 +75,6 @@ class WSReader(WSReaderLite):
             logging.exception(f"{PydanticClassType.__name__} json decode failed;;;"
                               f"exception: {e}, json_data: {json_data}")
             return None
-    #
-    # @staticmethod
-    # def dispatch_pydantic_obj(pydantic_obj, callback):
-    #     try:
-    #         callback(pydantic_obj)
-    #     except Exception as e:
-    #         logging.exception(f"dropping this update - ws invoked callback threw exception;;;"
-    #                           f"PydanticObj: {pydantic_obj}, Exception {e}")
 
     @staticmethod
     def handle_json_str(json_str: str, ws_cont):
