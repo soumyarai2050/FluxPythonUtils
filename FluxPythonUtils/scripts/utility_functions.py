@@ -1364,3 +1364,14 @@ def get_disk_usage(locations: List[str] | None = None) -> None:
             logging.error(f"disk usage exceeded 90% for location {loc}. current disk usage: {used_memory}")
         elif used_memory > 70:
             logging.warning(f"disk usage exceeded 70% for location {loc}. current disk usage: {used_memory}")
+
+
+def get_pid_from_port(port: int):
+    try:
+        for conn in psutil.net_connections(kind='inet'):
+            if conn.laddr.port == port:
+                return conn.pid
+    except Exception as e:
+        print(f"Error: {e}")
+
+    return None
