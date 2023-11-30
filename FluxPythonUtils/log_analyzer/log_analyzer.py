@@ -138,7 +138,7 @@ class LogAnalyzer(ABC):
                         time.sleep(5*60)    # 5 minutes
                     else:
                         logging.error(f"Some Error Occurred while calling {web_client_callable.__name__}, "
-                                      f"sending all updates to err_handling_callable")
+                                      f"sending all updates to err_handling_callable, {str(e)}")
                         err_handling_callable(pydantic_obj_list)
                 pydantic_obj_list.clear()  # cleaning list to start fresh cycle
             oldest_entry_time = DateTime.utcnow()
@@ -205,7 +205,7 @@ class LogAnalyzer(ABC):
             self.running_log_analyzer_thread_list.append(new_thread)
             new_thread.start()
 
-    def handle_raw_performance_data_queue_err_handler(self):
+    def handle_raw_performance_data_queue_err_handler(self, pydantic_obj_list):
         pass
 
     def _handle_raw_performance_data_queue(self):
