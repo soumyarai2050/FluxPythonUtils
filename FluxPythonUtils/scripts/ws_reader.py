@@ -42,7 +42,8 @@ class WSReader(WSReaderLite):
         # ideally 20 instead of 2 : allows for timeout to notice shutdown is triggered and thread to teardown
         time.sleep(2)
 
-    ws_cont_list: ClassVar[List['WSReader']] = list()
+    ws_cont_list: ClassVar[List['WSReader']] = []
+    new_ws_cont_list: ClassVar[List['WSReader']] = []
 
     # callable accepts List of PydanticClassType or None; None implies WS connection closed
     def __init__(self, uri: str, PydanticClassType: Type, PydanticClassTypeList: Type, callback: Callable,
@@ -51,9 +52,13 @@ class WSReader(WSReaderLite):
         self.PydanticClassType: Type = PydanticClassType
         self.PydanticClassTypeList = PydanticClassTypeList
         self.notify = notify
+        self.expired: bool = False
 
     def register_to_run(self):
         WSReader.ws_cont_list.append(self)
+
+    def new_register_to_run(self):
+        WSReader.new_ws_cont_list.append(self)
 
     @staticmethod
     def read_pydantic_obj_list(json_data, PydanticClassListType):
@@ -105,18 +110,20 @@ class WSReader(WSReaderLite):
     @staticmethod
     async def ws_client():
         # Connect to the server (don't send timeout=None to prod, used for debug only)
-        pending_tasks = list()
-        json_str = "{\"Done\": 1}"
+        pending_tasks = []
         for idx, ws_cont in enumerate(WSReader.ws_cont_list):
             # default max buffer size is: 10MB, pass max_size=value to connect and increase / decrease the default
             # size, for eg: max_size=2**24 to change the limit to 16 MB
             try:
                 ws_cont.ws = await websockets.connect(ws_cont.uri, ping_timeout=None, max_size=2 ** 24)
                 task = asyncio.create_task(ws_cont.ws.recv(), name=str(idx))
-                pending_tasks.append(task)
             except Exception as e:
                 logging.exception(f"ws_client error while connecting/async task submission ws_cont: {ws_cont}, "
                                   f"exception: {e}")
+                ws_cont.force_disconnected = True
+            else:
+                pending_tasks.append(task)
+
         ws_remove_set = set()
         while len(pending_tasks):
             try:
@@ -141,8 +148,10 @@ class WSReader(WSReaderLite):
                         break
 
                 data_found_task = None
+                json_str: str | None = None
                 try:
                     data_found_task = completed_tasks.pop()
+                    json_str = data_found_task.result()
                 except ConnectionClosedOK as e:
                     idx = int(data_found_task.get_name())
                     logging.debug('\n', f"web socket connection closed gracefully within while loop for idx {idx};;;"
@@ -160,7 +169,7 @@ class WSReader(WSReaderLite):
                     ws_remove_set.add(idx)
                 except Exception as e:
                     idx = int(data_found_task.get_name())
-                    logging.debug('\n', f"web socket future returned exception within while loop for idx  {idx}"
+                    logging.debug('\n', f"web socket future returned exception within while loop for idx {idx}"
                                         f"{data_found_task.get_name()};;; Exception: {e}")
                     # should we remove this ws - maybe this is an intermittent error, improve handling case by case
                     ws_remove_set.add(idx)
@@ -174,7 +183,6 @@ class WSReader(WSReaderLite):
                     WSReader.ws_cont_list[idx].force_disconnected = True
                     continue
 
-                json_str = data_found_task.result()
                 if json_str is not None:
                     recreated_task = asyncio.create_task(WSReader.ws_cont_list[idx].ws.recv(), name=str(idx))
                     pending_tasks.add(recreated_task)
@@ -182,11 +190,28 @@ class WSReader(WSReaderLite):
                         logging.warning(
                             f"> 1 MB json_str detected, size: {len(json_str)} in ws recv;;;json_str: {json_str}")
                     WSReader.handle_json_str(json_str, WSReader.ws_cont_list[idx])
-                    json_str = None
-                    json_data = None
                 else:
                     logging.error(f"dropping {WSReader.ws_cont_list[idx]} - json_str found None")
                     WSReader.ws_cont_list[idx].ws.disconnect()
                     WSReader.ws_cont_list[idx].force_disconnected = True
                     continue
-        logging.warning("Executor instance going down")
+
+            for ws_cont in WSReader.new_ws_cont_list:
+                WSReader.ws_cont_list.append(ws_cont)
+
+                idx = WSReader.ws_cont_list.index(ws_cont)
+
+                # default max buffer size is: 10MB, pass max_size=value to connect and increase / decrease the default
+                # size, for eg: max_size=2**24 to change the limit to 16 MB
+                try:
+                    ws_cont.ws = await websockets.connect(ws_cont.uri, ping_timeout=None, max_size=2 ** 24)
+                    task = asyncio.create_task(ws_cont.ws.recv(), name=str(idx))
+                except Exception as e:
+                    logging.exception(f"ws_client error while connecting/async task submission ws_cont: {ws_cont}, "
+                                      f"exception: {e}")
+                    ws_cont.force_disconnected = True
+                else:
+                    pending_tasks.add(task)
+                    logging.debug(f"Added new ws in pending list for uri: {ws_cont.uri}")
+                WSReader.new_ws_cont_list.remove(ws_cont)
+        logging.warning(f"WSReader instance going down")
