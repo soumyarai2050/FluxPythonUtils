@@ -7,12 +7,13 @@ import time
 from abc import ABC, abstractmethod
 import re
 import subprocess
-from typing import Dict, List, Callable, Type
+from typing import Dict, List, Callable, Type, Any
 from threading import Thread, current_thread, Lock
 import signal
 import select
 import glob
 import queue
+from pathlib import PurePath
 
 # 3rd part imports
 from pydantic import BaseModel
@@ -42,12 +43,20 @@ def get_transaction_counts_n_timeout_from_config(config_yaml_dict: Dict | None,
 class LogDetail(BaseModel):
     service: str
     log_file_path: str
+    is_running: bool = True
     critical: bool = False
     log_prefix_regex_pattern_to_callable_name_dict: Dict[str, str] | None
     log_file_path_is_regex: bool = False
+    process: subprocess.Popen | None
+    poll_timeout: float = 60.0 * 1000   # milli_secs
+    processed_timestamp: str | None
+
+    class Config:
+        arbitrary_types_allowed = True  # required to use WebSocket as field type since it is arbitrary type
 
 
 class LogAnalyzer(ABC):
+    timestamp_regex_pattern: str = r'\b\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}\b'
 
     def __init__(self, regex_file: str, config_yaml_dict: Dict, performance_benchmark_webclient_object,
                  raw_performance_data_model_type: Type[BaseModel],
@@ -67,8 +76,7 @@ class LogAnalyzer(ABC):
             log_prefix_regex_pattern_to_callable_name_dict \
             if log_prefix_regex_pattern_to_callable_name_dict is not None else {}
 
-        self.process_list: List[subprocess.Popen] = []
-        self.run_mode: bool = True
+        self.log_file_path_to_log_detail_dict: Dict[str, LogDetail] = {}
         self.signal_handler_lock: Lock = Lock()
         self.log_refresh_threshold: int = 60
         self.log_details_queue: queue.Queue = queue.Queue()
@@ -155,7 +163,7 @@ class LogAnalyzer(ABC):
 
         # pattern matched added files
         pattern_matched_added_file_path_to_service_dict: Dict[str, str] = {}
-        while self.run_mode:
+        while True:
             for log_detail in self.non_existing_log_details:
                 if not log_detail.log_file_path_is_regex:
                     if os.path.exists(log_detail.log_file_path):
@@ -199,7 +207,7 @@ class LogAnalyzer(ABC):
             time.sleep(0.5)     # delay for while loop
 
     def dynamic_start_log_analyzer_for_log_details(self):
-        while self.run_mode:
+        while True:
             log_detail = self.log_details_queue.get()   # blocking call
             new_thread = Thread(target=self._listen, args=(log_detail,), daemon=True)
             self.running_log_analyzer_thread_list.append(new_thread)
@@ -275,43 +283,39 @@ class LogAnalyzer(ABC):
             "handle_perf_benchmark_matched_log_message"
 
         setattr(thread, "service_detail", log_detail)
-        process, poll = self._run_tail_process_n_poll_register(log_detail)
-        last_update_date_time: DateTime = DateTime.utcnow()
-        self._analyze_log(process, poll, log_detail, last_update_date_time)
 
-    def _run_tail_process_n_poll_register(self, log_detail: LogDetail):
-        process: subprocess.Popen = subprocess.Popen(['tail', '-F', log_detail.log_file_path],
-                                                     stdout=subprocess.PIPE,
-                                                     stderr=subprocess.STDOUT)
+        processed_timestamp = log_detail.processed_timestamp
+
+        process, poll = self._run_tail_process_n_poll_register(log_detail, processed_timestamp)
+        log_detail.is_running = True
+        self._analyze_log(process, poll, log_detail)
+        process.kill()
+        process.wait()
+
+        logging.info(f"Restarting tail process for log_file: {log_detail.log_file_path}")
+        self.log_details_queue.put(log_detail)
+
+    def _run_tail_process_n_poll_register(self, log_detail: LogDetail, restart_timestamp: str | None = None):
+        tail_log_file_path = PurePath(__file__).parent.parent / "scripts" / "tail_logs.sh"
+        tail_args = [tail_log_file_path, log_detail.log_file_path]
+        if restart_timestamp is not None:
+            tail_args.append(restart_timestamp)
+        process: subprocess.Popen = subprocess.Popen(tail_args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        logging.debug(f"Started tail process for log_file: {log_detail.log_file_path}")
         os.set_blocking(process.stdout.fileno(), False)    # makes stdout.readlines() non-blocking
         # add poll for process stdout for non-blocking tail of log file
         poll: select.poll = select.poll()
         poll.register(process.stdout)
-        self.process_list.append(process)
+
+        log_detail.process = process
+        self.log_file_path_to_log_detail_dict[log_detail.log_file_path] = log_detail
         return process, poll
 
-    def _reconnect_process(self, process: subprocess.Popen, log_detail: LogDetail) -> List:
-        process.kill()
-        self.process_list.remove(process)
-        process, poll = self._run_tail_process_n_poll_register(log_detail)
-        return [process, poll]
-
-    def _analyze_log(self, process: subprocess.Popen, poll: select.poll, log_detail: LogDetail,
-                     last_update_date_time: DateTime) -> None:
-        while self.run_mode:
+    def _analyze_log(self, process: subprocess.Popen, poll: select.poll, log_detail: LogDetail) -> None:
+        while log_detail.is_running:
             try:
-                # if critical service, periodically check if new logs are generated. if no new logs are
-                # generated, send an alert
-                if log_detail.critical:
-                    if (DateTime.utcnow() - last_update_date_time).seconds > self.log_refresh_threshold:
-                        self.notify_no_activity(log_detail)
-                        # updating the timer again to prevent continuous alert generation
-                        last_update_date_time = DateTime.utcnow()
-                        continue
-                    # else not required: last update threshold not breached
-                # else not required: service is not critical. skipping periodic check for new logs
-
-                if poll.poll():
+                res = poll.poll(log_detail.poll_timeout)    # file descriptor's event based blocking call
+                if res:
                     lines = process.stdout.readlines()
 
                     for line in lines:
@@ -322,13 +326,20 @@ class LogAnalyzer(ABC):
                         if line.startswith("tail"):
                             logging.warning(line)
 
+                        log_detail: LogDetail = self.log_file_path_to_log_detail_dict.get(log_detail.log_file_path)
+
+                        timestamp_pattern = re.compile(LogAnalyzer.timestamp_regex_pattern)
+                        match = timestamp_pattern.search(line)
+                        if match:
+                            timestamp = match.group(0)
+                            log_detail.processed_timestamp = timestamp
+
                         if "tail:" in line and "giving up on this name" in line:
                             brief_msg_str: str = (f"tail error encountered in log service: {log_detail.service}, "
                                                   f"restarting...")
                             logging.critical(f"{brief_msg_str};;;{line}")
                             self.notify_tail_error_in_log_service(brief_msg_str, line)
-                            process, poll = self._reconnect_process(process=process, log_detail=log_detail)
-                            continue
+                            return
 
                         if self.refresh_regex_list():
                             logging.info(f"suppress alert regex list updated. regex_list: {self.regex_list}")
@@ -340,14 +351,18 @@ class LogAnalyzer(ABC):
                             if not re.compile(log_prefix_regex_pattern).search(line):
                                 continue
 
+                            log_prefix: str
+                            log_message: str
                             log_prefix, log_message = \
                                 self._get_log_prefix_n_message(log_line=line,
                                                                log_prefix_pattern=log_prefix_regex_pattern)
+
                             regex_match: bool = False
                             for regex_pattern in self.regex_list:
                                 try:
                                     if re.compile(fr"{regex_pattern}").search(log_message):
-                                        logging.info(f"regex pattern matched, skipping;;; log_message: {log_message[:200]}")
+                                        logging.info(f"regex pattern matched, skipping;;; "
+                                                     f"log_message: {log_message[:200]}")
                                         regex_match = True
                                         break
                                 except re.error as e:
@@ -363,18 +378,23 @@ class LogAnalyzer(ABC):
                                 match_callable: Callable = getattr(self, callable_name)
                             except AttributeError as e:
                                 logging.error(f"Couldn't find callable {callable_name} in inherited log_analyzer, "
-                                              f"exception: {e}, inheriting log_analyzer name: {self.__class__.__name__}")
+                                              f"exception: {e}, inheriting log_analyzer name: "
+                                              f"{self.__class__.__name__}")
                             if match_callable:
-                                match_callable(log_prefix, log_message)
+                                match_callable(log_prefix, log_message, log_detail)
                 else:
-                    err_str_ = "Unexpected: Received empty list of tuples from poll.poll()"
-                    logging.error(err_str_)
+                    # if critical service, periodically check if new logs are generated. if no new logs are
+                    # generated, send an alert
+                    if log_detail.critical:
+                        self.notify_no_activity(log_detail)
+                    # else not required: service is not critical. skipping periodic check for new logs
 
             except Exception as e:
                 logging.exception(f"_analyze_log failed;;; exception: {e}")
                 # with self.signal_handler_lock:
                 #     if self.run_mode:
                         # self._signal_handler(signal.Signals.SIGTERM)
+
 
     def _truncate_str(self, text: str, max_size_in_bytes: int = 2048) -> str:
         if len(text.encode("utf-8")) > max_size_in_bytes:
@@ -389,7 +409,7 @@ class LogAnalyzer(ABC):
         log_message_without_prefix: str = log_line.replace(log_prefix, "").strip()
         return [log_prefix, log_message_without_prefix]
 
-    def handle_perf_benchmark_matched_log_message(self, log_prefix: str, log_message: str):
+    def handle_perf_benchmark_matched_log_message(self, log_prefix: str, log_message: str, log_detail: LogDetail):
         pattern = re.compile("_timeit_.*_timeit_")
         if search_obj := re.search(pattern, log_message):
             found_pattern = search_obj.group()

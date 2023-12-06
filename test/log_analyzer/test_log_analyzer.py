@@ -42,10 +42,14 @@ def test_timeout_1_for_queue_handler(data_queue, data_list):
         # deepcopy because passed obj_list is container type, by the time we reach one timeout it gets cleaned
         data_list.append(copy.deepcopy(obj_list))
 
+    def err_handling_callable(obj):
+        pass
+
     transaction_limit = 10
     timeout_secs = 5
     thread = Thread(target=LogAnalyzer.queue_handler,
-                    args=(data_queue, transaction_limit, timeout_secs, mock_web_client,), daemon=True)
+                    args=(data_queue, transaction_limit, timeout_secs, mock_web_client, err_handling_callable,),
+                    daemon=True)
     thread.start()
 
     for i in range(5):
@@ -72,10 +76,14 @@ def test_timeout_2_for_queue_handler(data_queue, data_list):
         # deepcopy because passed obj_list is container type, by the time we reach one timeout it gets cleaned
         data_list.append(copy.deepcopy(obj_list))
 
+    def err_handling_callable(obj):
+        pass
+
     transaction_limit = 10
     timeout_secs = 5
     thread = Thread(target=LogAnalyzer.queue_handler,
-                    args=(data_queue, transaction_limit, timeout_secs, mock_web_client,), daemon=True)
+                    args=(data_queue, transaction_limit, timeout_secs, mock_web_client, err_handling_callable,),
+                    daemon=True)
     thread.start()
 
     # time for queue to get remaining timeout
@@ -107,10 +115,14 @@ def test_timeout_3_for_queue_handler(data_queue, data_list):
         # deepcopy because passed obj_list is container type, by the time we reach one timeout it gets cleaned
         data_list.append(copy.deepcopy(obj_list))
 
+    def err_handling_callable(obj):
+        pass
+
     transaction_limit = 10000000
     timeout_secs = 5
     thread = Thread(target=LogAnalyzer.queue_handler,
-                    args=(data_queue, transaction_limit, timeout_secs, mock_web_client,), daemon=True)
+                    args=(data_queue, transaction_limit, timeout_secs, mock_web_client, err_handling_callable,),
+                    daemon=True)
     thread.start()
 
     i = 1
@@ -136,10 +148,14 @@ def test_transaction_limit_for_queue_handler(data_queue, data_list):
         # deepcopy because passed obj_list is container type, by the time we reach one timeout it gets cleaned
         data_list.append(copy.deepcopy(obj_list))
 
+    def err_handling_callable(obj):
+        pass
+
     transaction_limit = 5
     timeout_secs = 10
     thread = Thread(target=LogAnalyzer.queue_handler,
-                    args=(data_queue, transaction_limit, timeout_secs, mock_web_client,), daemon=True)
+                    args=(data_queue, transaction_limit, timeout_secs, mock_web_client, err_handling_callable,),
+                    daemon=True)
     thread.start()
 
     for i in range(10):
@@ -232,13 +248,17 @@ class MockLogAnalyzer(LogAnalyzer):
         thread = Thread(target=self._handle_test_check_queue, daemon=True)
         thread.start()
 
+    def err_handling_callable(self):
+        pass
+
     def _handle_test_check_queue(self):
         transaction_counts_per_call = 5
         timeout_secs = 2
         MockLogAnalyzer.queue_handler(
             self.test_check_queue, transaction_counts_per_call,
             timeout_secs,
-            self.webclient_object.mock_client_callable)
+            self.webclient_object.mock_client_callable,
+            self.err_handling_callable)
 
     def notify_no_activity(self, log_detail: LogDetail):
         no_activity_log_detail_list.append(log_detail)
@@ -246,14 +266,16 @@ class MockLogAnalyzer(LogAnalyzer):
     def notify_tail_error_in_log_service(self, brief_msg_str: str, detail_msg_str: str):
         pass
 
-    def handle_test_matched_log_message(self, log_prefix: str, log_message: str):
+    def handle_test_matched_log_message(self, log_prefix: str, log_message: str, log_detail: LogDetail):
         self.test_check_queue.put(log_message)
 
 
 def tail_process_exists(mock_log_analyzer, log_file_path) -> bool:
-    for process in mock_log_analyzer.process_list:
-        if process.args[0] == "tail" and process.args[-1] == str(log_file_path):
-            break
+    for cached_log_file_path, log_detail in mock_log_analyzer.log_file_path_to_log_detail_dict.items():
+        if cached_log_file_path == log_file_path:
+            if (str(log_detail.process.args[0]).endswith("tail_logs.sh") and
+                    log_detail.process.args[-1] == str(log_file_path)):
+                break
     else:
         return False
     return True
@@ -339,7 +361,7 @@ def test_dynamic_pattern_load_and_start_tail():
 
         time.sleep(1)
 
-        print(mock_log_analyzer.process_list)
+        print(mock_log_analyzer.log_file_path_to_log_detail_dict)
         if not tail_process_exists(mock_log_analyzer, file_path):
             assert False, ("Could not find any process in process list data member of log analyzer object having tail "
                            f"for file_name: {file_path}")
