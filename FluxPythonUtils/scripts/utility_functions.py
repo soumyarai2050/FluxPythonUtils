@@ -1375,3 +1375,21 @@ def get_pid_from_port(port: int):
         print(f"Error: {e}")
 
     return None
+
+
+def is_process_running(pid: int) -> bool:
+    try:
+        process = psutil.Process(pid)
+        try:
+            # wait is required to retrieve the exit status else killed/terminated background subprocess
+            # remains defunct and is_running() returns True - raises TimeoutExpired if no status found
+            # within timout period, meaning process is running
+            # BONUS info: we can use process.poll() without also instead of wait if we had
+            # subprocess.popen object to check its status - process.poll() returns None till process
+            # is running and once it is completed it returns exit code of process
+            process.wait(1)
+        except psutil.TimeoutExpired:
+            return True
+        return process.is_running()
+    except psutil.NoSuchProcess:
+        return False
