@@ -1234,6 +1234,7 @@ async def execute_tasks_list_with_all_completed(tasks_list: List[asyncio.Task],
         completed_task = None
         try:
             completed_task = completed_tasks.pop()
+            _ = completed_task.result()  # triggers exceptions if any raised
         except Exception as e:
             logging.exception(f"execute_tasks_list_with_all_completed failed for task name: {completed_task.get_name()}"
                               f", task: {completed_task} with exception: {e}")
@@ -1260,6 +1261,7 @@ async def execute_tasks_list_with_first_completed(tasks_list: List[asyncio.Task]
             completed_task = None
             try:
                 completed_task = completed_tasks.pop()
+                _ = completed_task.result()  # triggers exceptions if any raised
             except ConnectionClosedOK as e:
                 logging.debug('\n', f"ConnectionClosedOK error in task with name: "
                                     f"{completed_task.get_name()};;; Exception: {e}")

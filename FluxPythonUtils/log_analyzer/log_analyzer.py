@@ -97,7 +97,8 @@ class LogAnalyzer(ABC):
 
     @staticmethod
     def queue_handler(queue_obj: queue.Queue, bulk_transactions_counts_per_call: int,
-                      bulk_transaction_timeout: int, web_client_callable, err_handling_callable):
+                      bulk_transaction_timeout: int, web_client_callable, err_handling_callable,
+                      client_connection_fail_retry_secs: int | None = None):
         pydantic_obj_list = []
         oldest_entry_time: DateTime = DateTime.utcnow()
         while True:
@@ -143,7 +144,10 @@ class LogAnalyzer(ABC):
                     elif "Failed to establish a new connection: [Errno 111] Connection refused" in str(e):
                         logging.error(f"Connection Error occurred while calling {web_client_callable.__name__}, "
                                       f"will stay on wait for 5 secs and again retry - ignoring all data for this call")
-                        time.sleep(5*60)    # 5 minutes
+
+                        if client_connection_fail_retry_secs is None:
+                            client_connection_fail_retry_secs = 5*60    # 5 minutes
+                        time.sleep(client_connection_fail_retry_secs)
                     else:
                         logging.error(f"Some Error Occurred while calling {web_client_callable.__name__}, "
                                       f"sending all updates to err_handling_callable, {str(e)}")
@@ -394,7 +398,6 @@ class LogAnalyzer(ABC):
                 # with self.signal_handler_lock:
                 #     if self.run_mode:
                         # self._signal_handler(signal.Signals.SIGTERM)
-
 
     def _truncate_str(self, text: str, max_size_in_bytes: int = 2048) -> str:
         if len(text.encode("utf-8")) > max_size_in_bytes:

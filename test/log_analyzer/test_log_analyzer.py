@@ -6,13 +6,14 @@ import threading
 import time
 from pathlib import PurePath
 import pytest
-from typing import List
+from typing import List, Set
 from queue import Queue
 from threading import Thread
 
 # 3rd party imports
 from pendulum import DateTime
 from pydantic import BaseModel, Field
+from fastapi.encoders import jsonable_encoder
 
 # project imports
 from FluxPythonUtils.log_analyzer.log_analyzer import LogAnalyzer, LogDetail
@@ -30,7 +31,12 @@ def data_list():
     yield []
 
 
-def test_timeout_1_for_queue_handler(data_queue, data_list):
+@pytest.fixture(scope="function")
+def err_obj_list():
+    yield []
+
+
+def test_timeout_1_for_queue_handler(data_queue, data_list, err_obj_list):
     """
     Test to check if timeout is 5 seconds and queue if populated with data every .99 secs,
     by the timeout of 5 secs, web_client callable must be called with expected 5 objects.
@@ -43,7 +49,7 @@ def test_timeout_1_for_queue_handler(data_queue, data_list):
         data_list.append(copy.deepcopy(obj_list))
 
     def err_handling_callable(obj):
-        pass
+        err_obj_list.append(obj)
 
     transaction_limit = 10
     timeout_secs = 5
@@ -429,3 +435,50 @@ def test_log_matched_web_client_call(config_logger_n_get_log_details):
         assert [test_run_mock_msg] in mock_client_callable_data_list, \
             (f"Could not find expected data in mock_client_callable_data_list, expected data: {[test_run_mock_msg]}, "
              f"mock_client_callable_data_list: {mock_client_callable_data_list}")
+
+
+class SampleBaseModel(BaseModel):
+    id: int | None = Field(alias='_id')
+    message: str | None = None
+
+    class Config:
+        allow_population_by_field_name = True
+
+
+class MockPatchClientError(Exception):
+    def __init__(self, non_existing_ids):
+        self.non_existing_ids: Set = set(non_existing_ids)
+        super().__init__(f"'objects with ids: {self.non_existing_ids} out of requested '")
+
+
+def test_patch_error_handling_in_queue_handler(data_queue, data_list, err_obj_list):
+
+    def mock_web_client(obj_list):
+        non_existing_ids = []
+        for obj in obj_list:
+            if obj.get("_id") % 2 != 0:
+                non_existing_ids.append(obj["_id"])
+            else:
+                data_list.append(obj)
+
+        raise MockPatchClientError(non_existing_ids)
+
+    def err_handling_callable(obj_list):
+        err_obj_list.extend(obj_list)
+
+    transaction_limit = 10
+    timeout_secs = 5
+    for i in range(10):
+        sample_basemodel: SampleBaseModel = SampleBaseModel()
+        sample_basemodel.id = i + 1
+        data_queue.put(jsonable_encoder(sample_basemodel, by_alias=True, exclude_none=True))
+    thread = Thread(target=LogAnalyzer.queue_handler,
+                    args=(data_queue, transaction_limit, timeout_secs, mock_web_client, err_handling_callable,),
+                    daemon=True)
+    thread.start()
+    time.sleep(0.5)
+
+    expected_list = [{'_id': 2}, {'_id': 4}, {'_id': 6}, {'_id': 8}, {'_id': 10}]
+    assert data_list == expected_list, f'Mismatched - data_list, expected: {expected_list}, received: {data_list}'
+    expected_err_obj_list = [{'_id': 1}, {'_id': 3}, {'_id': 5}, {'_id': 7}, {'_id': 9}]
+    assert err_obj_list == expected_err_obj_list, f'Mismatched - err_obj_list, expected: {expected_list}, received: {err_obj_list}'
