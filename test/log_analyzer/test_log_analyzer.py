@@ -482,3 +482,49 @@ def test_patch_error_handling_in_queue_handler(data_queue, data_list, err_obj_li
     assert data_list == expected_list, f'Mismatched - data_list, expected: {expected_list}, received: {data_list}'
     expected_err_obj_list = [{'_id': 1}, {'_id': 3}, {'_id': 5}, {'_id': 7}, {'_id': 9}]
     assert err_obj_list == expected_err_obj_list, f'Mismatched - err_obj_list, expected: {expected_list}, received: {err_obj_list}'
+
+
+class MockConnectionError(Exception):
+    def __init__(self):
+        super().__init__("Failed to establish a new connection: [Errno 111] Connection refused")
+
+
+def test_connection_error_handling_in_queue_handler(data_queue, data_list, err_obj_list):
+
+    call_counter = 0
+    def mock_web_client(obj_list):
+        nonlocal call_counter
+        call_counter += 1
+
+        if call_counter <= 3:
+            raise MockConnectionError
+        else:
+            data_list.extend(obj_list)
+
+    def err_handling_callable(obj_list):
+        err_obj_list.extend(obj_list)
+
+    transaction_limit = 10
+    timeout_secs = 5
+    client_connection_fail_retry_secs = 5
+    for i in range(40):
+        sample_basemodel: SampleBaseModel = SampleBaseModel()
+        sample_basemodel.id = i + 1
+        data_queue.put(jsonable_encoder(sample_basemodel, by_alias=True, exclude_none=True))
+    thread = Thread(target=LogAnalyzer.queue_handler,
+                    args=(data_queue, transaction_limit, timeout_secs, mock_web_client,
+                          err_handling_callable, client_connection_fail_retry_secs),
+                    daemon=True)
+    thread.start()
+    time.sleep(16)
+
+    assert call_counter == 4, \
+        "call counter variable must be updated to 4 since web_client must be called 4 times"
+    expected_data_list = []
+    for i in range(31, 41):
+        expected_data_list.append({'_id': i})
+    assert data_list == expected_data_list, \
+        f"Mismatched data_list: expected: {expected_data_list}, received: {data_list}"
+    assert err_obj_list == [], \
+        ("Since err_handling_callable is not called in connection exception, err_obj_list must be empty but found some "
+         f"data, err_obj_list: {err_obj_list}")
