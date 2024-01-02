@@ -16,7 +16,7 @@ import queue
 from pathlib import PurePath
 
 # 3rd part imports
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from pendulum import DateTime, parse
 
 # project imports
@@ -47,9 +47,9 @@ class LogDetail(BaseModel):
     critical: bool = False
     log_prefix_regex_pattern_to_callable_name_dict: Dict[str, str] | None
     log_file_path_is_regex: bool = False
-    process: subprocess.Popen | None
-    poll_timeout: float = 60.0 * 1000   # milli_secs
-    processed_timestamp: str | None
+    process: subprocess.Popen | None = None
+    poll_timeout: float = 60.0   # seconds
+    processed_timestamp: str | None = None
 
     class Config:
         arbitrary_types_allowed = True  # required to use WebSocket as field type since it is arbitrary type
@@ -318,7 +318,11 @@ class LogAnalyzer(ABC):
     def _analyze_log(self, process: subprocess.Popen, poll: select.poll, log_detail: LogDetail) -> None:
         while log_detail.is_running:
             try:
-                res = poll.poll(log_detail.poll_timeout)    # file descriptor's event based blocking call
+                start_time = DateTime.utcnow()
+                timeout_ms = log_detail.poll_timeout * 1000     # poll.poll takes timeout time in milliseconds
+                res = poll.poll(timeout_ms)    # file descriptor's event based blocking call
+                end_time = DateTime.utcnow()
+                delta = (end_time - start_time).total_seconds()
                 if res:
                     lines = process.stdout.readlines()
 
@@ -389,9 +393,10 @@ class LogAnalyzer(ABC):
                 else:
                     # if critical service, periodically check if new logs are generated. if no new logs are
                     # generated, send an alert
-                    if log_detail.critical:
+                    if log_detail.critical and delta >= log_detail.poll_timeout:
                         self.notify_no_activity(log_detail)
-                    # else not required: service is not critical. skipping periodic check for new logs
+                    # else not required: service is not critical or poll_timeout is not breached - skipping periodic
+                    # check for new logs
 
             except Exception as e:
                 logging.exception(f"_analyze_log failed;;; exception: {e}")

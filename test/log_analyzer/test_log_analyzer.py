@@ -6,7 +6,7 @@ import threading
 import time
 from pathlib import PurePath
 import pytest
-from typing import List, Set
+from typing import List, Set, Dict
 from queue import Queue
 from threading import Thread
 
@@ -394,7 +394,7 @@ def test_no_activity(config_logger_n_get_log_details):
 
     logging.testrun("Mock log message")
 
-    time.sleep(62)  # no activity wait
+    time.sleep(60.5)  # no activity wait
 
     assert log_details[0] in no_activity_log_detail_list, \
         (f"Could not find log_detail in no_activity_log_detail_list, log_detail: {log_details}, "
@@ -525,6 +525,34 @@ def test_connection_error_handling_in_queue_handler(data_queue, data_list, err_o
         expected_data_list.append({'_id': i})
     assert data_list == expected_data_list, \
         f"Mismatched data_list: expected: {expected_data_list}, received: {data_list}"
+    print(data_list)
     assert err_obj_list == [], \
         ("Since err_handling_callable is not called in connection exception, err_obj_list must be empty but found some "
          f"data, err_obj_list: {err_obj_list}")
+
+
+def test_connection_failure_handling_in_queue_handler(data_queue, data_list, err_obj_list):
+
+    def mock_web_client(obj_list):
+        raise Exception("Some Error Occurred")
+
+    def err_handling_callable(obj_list):
+        err_obj_list.extend(obj_list)
+
+    transaction_limit = 5
+    timeout_secs = 5
+    for i in range(5):
+        sample_basemodel: SampleBaseModel = SampleBaseModel()
+        sample_basemodel.id = i + 1
+        data_queue.put(jsonable_encoder(sample_basemodel, by_alias=True, exclude_none=True))
+    thread = Thread(target=LogAnalyzer.queue_handler,
+                    args=(data_queue, transaction_limit, timeout_secs, mock_web_client,
+                          err_handling_callable),
+                    daemon=True)
+
+    thread.start()
+
+    expected_err_obj_list: List[Dict] = [{'_id': 1}, {'_id': 2}, {'_id': 3}, {'_id': 4}, {'_id': 5}]
+
+    assert err_obj_list == expected_err_obj_list, (f'Mismatched - err_obj_list, expected: {expected_err_obj_list}, '
+                                                   f'received: {err_obj_list}')
