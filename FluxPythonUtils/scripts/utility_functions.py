@@ -27,6 +27,7 @@ import timeit
 import functools
 import psutil
 import shutil
+import subprocess
 
 # 3rd party packages
 from pydantic import BaseModel
@@ -1372,9 +1373,12 @@ def get_pid_from_port(port: int):
     try:
         for conn in psutil.net_connections(kind='inet'):
             if conn.laddr.port == port:
-                return conn.pid
+                if conn.pid:
+                    return conn.pid
+        else:
+            logging.error("Can't find pid with port")
     except Exception as e:
-        print(f"Error: {e}")
+        logging.error(f"get_pid_from_port failed, exception: {e}")
 
     return None
 

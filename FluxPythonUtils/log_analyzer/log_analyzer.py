@@ -44,13 +44,14 @@ class LogDetail(BaseModel):
     service: str
     log_file_path: str
     is_running: bool = True
+    force_kill: bool = False
     critical: bool = False
     log_prefix_regex_pattern_to_callable_name_dict: Dict[str, str] | None
     log_file_path_is_regex: bool = False
     process: subprocess.Popen | None = None
     poll_timeout: float = 60.0   # seconds
     processed_timestamp: str | None = None
-
+    last_processed_utc_datetime: DateTime | None = None
     class Config:
         arbitrary_types_allowed = True  # required to use WebSocket as field type since it is arbitrary type
 
@@ -83,6 +84,7 @@ class LogAnalyzer(ABC):
         self.running_log_analyzer_thread_list: List[Thread] = []
         self.running_pattern_to_file_name_dict: Dict[str, str] = {}
         self.raw_performance_data_queue: queue.Queue = queue.Queue()
+        self.pattern_matched_added_file_path_to_service_dict: Dict[str, str] = {}
         # signal.signal(signal.SIGINT, self._signal_handler)
         # signal.signal(signal.SIGTERM, self._signal_handler)
 
@@ -166,7 +168,6 @@ class LogAnalyzer(ABC):
             self.non_existing_log_details.append(log_detail)
 
         # pattern matched added files
-        pattern_matched_added_file_path_to_service_dict: Dict[str, str] = {}
         while True:
             for log_detail in self.non_existing_log_details:
                 if not log_detail.log_file_path_is_regex:
@@ -182,8 +183,9 @@ class LogAnalyzer(ABC):
                     pattern_matched_file_paths = glob.glob(log_detail.log_file_path)
                     for pattern_matched_file_path in pattern_matched_file_paths:
                         # avoiding recently added files with this log_detail object
-                        if pattern_matched_file_path in pattern_matched_added_file_path_to_service_dict:
-                            service: str = pattern_matched_added_file_path_to_service_dict[pattern_matched_file_path]
+                        if pattern_matched_file_path in self.pattern_matched_added_file_path_to_service_dict:
+                            service: str = (
+                                self.pattern_matched_added_file_path_to_service_dict)[pattern_matched_file_path]
                             if service != log_detail.service:
                                 logging.error("Dropping This LogDetail: Found log_analyzer init request for "
                                               "unix-pattern matched file having same service and file_name already "
@@ -200,7 +202,8 @@ class LogAnalyzer(ABC):
                                                    log_file_path_is_regex=log_detail.log_file_path_is_regex)
                         self.log_details_queue.put(new_log_detail)
 
-                        pattern_matched_added_file_path_to_service_dict[pattern_matched_file_path] = log_detail.service
+                        self.pattern_matched_added_file_path_to_service_dict[pattern_matched_file_path] = (
+                            log_detail.service)
 
                         # updating list of tuple of pattern and log_file_path
                         for pattern, _ in log_detail.log_prefix_regex_pattern_to_callable_name_dict.items():
@@ -293,18 +296,23 @@ class LogAnalyzer(ABC):
         process, poll = self._run_tail_process_n_poll_register(log_detail, processed_timestamp)
         log_detail.is_running = True
         self._analyze_log(process, poll, log_detail)
-        process.kill()
+        os.killpg(os.getpgid(process.pid), signal.SIGTERM)
         process.wait()
 
-        logging.info(f"Restarting tail process for log_file: {log_detail.log_file_path}")
-        self.log_details_queue.put(log_detail)
+        if not log_detail.force_kill:
+            logging.info(f"Restarting tail process for log_file: {log_detail.log_file_path}")
+            self.log_details_queue.put(log_detail)
+        else:
+            log_detail.force_kill = False   # reverting force_kill to False
+            logging.info(f"Force Killing log_detail for file: {log_detail.log_file_path}")
 
     def _run_tail_process_n_poll_register(self, log_detail: LogDetail, restart_timestamp: str | None = None):
         tail_log_file_path = PurePath(__file__).parent.parent / "scripts" / "tail_logs.sh"
         tail_args = [tail_log_file_path, log_detail.log_file_path]
         if restart_timestamp is not None:
             tail_args.append(restart_timestamp)
-        process: subprocess.Popen = subprocess.Popen(tail_args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        process: subprocess.Popen = subprocess.Popen(tail_args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                                     preexec_fn=os.setpgrp)
         logging.debug(f"Started tail process for log_file: {log_detail.log_file_path}")
         os.set_blocking(process.stdout.fileno(), False)    # makes stdout.readlines() non-blocking
         # add poll for process stdout for non-blocking tail of log file
@@ -390,6 +398,9 @@ class LogAnalyzer(ABC):
                                               f"{self.__class__.__name__}")
                             if match_callable:
                                 match_callable(log_prefix, log_message, log_detail)
+
+                            # updating last_processed_utc_datetime for this log_detail
+                            log_detail.last_processed_utc_datetime = DateTime.utcnow()
                 else:
                     # if critical service, periodically check if new logs are generated. if no new logs are
                     # generated, send an alert

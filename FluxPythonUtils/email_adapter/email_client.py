@@ -13,14 +13,59 @@ from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import parseaddr
-from typing import List, Tuple
+from typing import List, Tuple, Final
 
 from bs4 import BeautifulSoup
 from dateutil import parser
 
-from FluxPythonUtils.email_adapter.email_automation import Attachment, EmailUser
-from FluxPythonUtils.email_adapter.email import Email
+from FluxPythonUtils.email_adapter.email_handler import EmailHandler
 from FluxPythonUtils.scripts.utility_functions import file_exist
+
+
+class EmailUser:
+    def __init__(self, username: str, email_address: str):
+        self.__username: str = username
+        self.__email_address: str = email_address
+
+    @property
+    def username(self):
+        return self.__username
+
+    @property
+    def email_address(self):
+        return self.__email_address
+
+    def __str__(self):
+        return f"{self.__username} <{self.__email_address}>"
+
+
+class Attachment:
+    """
+    Class for attachments to be used as objects for every attachment in read/write email method
+    """
+
+    def __init__(self, file_path: str, payload):
+        if file_path is None:
+            logging.exception("file_path not provided as parameter in attachment initialization")
+            raise Exception("file_path can't be empty, provide it at the time of initialization")
+        self.__file_path: Final[str] = file_path
+        self.__payload: Final = payload
+        self.__size: Final[int] = len(self.__payload)
+
+    @property
+    def file_path(self):
+        return self.__file_path
+
+    @property
+    def payload(self):
+        return self.__payload
+
+    @property
+    def size(self):
+        return self.__size
+
+    def __str__(self):
+        return f"attachment file_path: {self.__file_path}"
 
 
 class EmailClient:
@@ -78,14 +123,22 @@ class EmailClient:
 
         # to interact with the server, first we log in
         # and, then we send the message
-        server.login(self.__username, self.__password)
-        return server
+        try:
+            server.login(self.__username, self.__password)
+        except Exception as e:
+            raise Exception(f"Email Login failed fro SMTP for username: {self.__username}: exception: {e}")
+        else:
+            return server
 
     def __init_read_mail(self) -> imaplib.IMAP4_SSL:
         # connect to the server and go to its inbox
         imap = imaplib.IMAP4_SSL(self.__imap_server_host)
-        imap.login(self.__username, self.__password)
-        return imap
+        try:
+            imap.login(self.__username, self.__password)
+        except Exception as e:
+            raise Exception(f"Email Login failed for IMAP for username: {self.__username}: exception: {e}")
+        else:
+            return imap
 
     def __del__(self):
         self.__smtp_server.quit()
@@ -110,7 +163,7 @@ class EmailClient:
             return encoded_words
         return byte_string.decode(charset)
 
-    def send_mail(self, email_obj: Email) -> bool:
+    def send_mail(self, email_obj: EmailHandler) -> bool:
         """
         Method to send mail
         Takes 3 parameters:
@@ -193,7 +246,7 @@ class EmailClient:
         return body
 
     def read_mail(self, latest: bool = True, mark_read: bool = False, unread: bool = True, number_of_mails: int = 10,
-                  mail_section: str = "inbox") -> List[Email]:
+                  mail_section: str = "inbox") -> List[EmailHandler]:
         """
         Method to read received mails in user's account
         Takes 3 optional parameters:
@@ -203,7 +256,7 @@ class EmailClient:
         mail-section: default is inbox
         Returns List of Email Objects
         """
-        received_emails_list: List[Email] = list()
+        received_emails_list: List[EmailHandler] = list()
 
         # we choose the inbox but you can select others
         if not mark_read:
@@ -234,7 +287,7 @@ class EmailClient:
         return sender_username, sender_email_address
 
     def fetch_mails_from_server(self, search_query: str, latest: bool = True,
-                                number_of_mails: int | None = None, delete_mails: bool = False) -> List[Email]:
+                                number_of_mails: int | None = None, delete_mails: bool = False) -> List[EmailHandler]:
         """
         Method to fetch and return the list of email objects from the server of service.
         Takes search_query to fetch specific mails, latest as bool which, if true means latest mails will be first
@@ -244,7 +297,7 @@ class EmailClient:
         This method returns either empty list of email objects, that means fetched mails where deleted as deleted
         parameter was True, or returns list of fetched email objects
         """
-        fetched_emails_list: List[Email] = list()
+        fetched_emails_list: List[EmailHandler] = list()
 
         status, data = self.__imap_server.search(None, search_query)
 
@@ -346,14 +399,14 @@ class EmailClient:
                     # Parsing html content to readable string
                     body = BeautifulSoup(body, "html.parser").text
 
-                    email_obj = Email(mail_from_user_obj, to_user_obj_list, cc_user_obj_list,
-                                      mail_subject, attachments_list, body, message_id, mail_time)
+                    email_obj = EmailHandler(mail_from_user_obj, to_user_obj_list, cc_user_obj_list,
+                                             mail_subject, attachments_list, body, message_id, mail_time)
                     fetched_emails_list.append(email_obj)
 
         return fetched_emails_list
 
     @staticmethod
-    def summarize_body(email_obj: Email, body_slice_length: int = 50) -> str:
+    def summarize_body(email_obj: EmailHandler, body_slice_length: int = 50) -> str:
         """
         method to summarize the body of provided email object and returns the formatted string having details of mail
         like notification.
@@ -381,25 +434,25 @@ class EmailClient:
 
         return summarized_content
 
-    def delete_mail(self, email_obj: Email) -> bool:
+    def delete_mail(self, email_obj: EmailHandler) -> bool:
         """
         Method to delete particular mail from the server of the service
         Takes email object as parameter and return bool for success confirmation
         """
 
-        delete_mails_list: List[Email] = self.search_mails(email_obj=email_obj, mark_read=True,
-                                                           delete_mails=True)
+        delete_mails_list: List[EmailHandler] = self.search_mails(email_obj=email_obj, mark_read=True,
+                                                                  delete_mails=True)
         if not delete_mails_list:
             return True
         else:
             return False
 
-    def search_mails(self, email_obj: Email | None = None, from_address: str | None = None,
+    def search_mails(self, email_obj: EmailHandler | None = None, from_address: str | None = None,
                      contained_string_subject: str | None = None, contained_string_body: str | None = None,
                      on_date: str | None = None, from_date: str | None = None,
                      before_date: str | None = None, mail_section: str = "inbox", mark_read: bool = False,
-                     delete_mails: bool = False) -> List[Email]:
-        searched_mails: List[Email] = list()
+                     delete_mails: bool = False) -> List[EmailHandler]:
+        searched_mails: List[EmailHandler] = list()
         message_id: str | None = email_obj.message_id if email_obj else None
         if message_id is None and from_address is None and contained_string_body is None \
                 and contained_string_subject is None and from_date is None and before_date is None:
@@ -478,7 +531,7 @@ class EmailClient:
             with open(delete_rules_file_path, "w") as json_fl:
                 json_fl.write(json_content)
 
-    def __delete_if_required(self, email_obj: Email, delete_rule_file_path: str) -> bool:
+    def __delete_if_required(self, email_obj: EmailHandler, delete_rule_file_path: str) -> bool:
         sender_mail_id_list, subject_container_string_list, body_container_string_list = \
             self.__load_delete_rules(delete_rule_file_path)
         if email_obj.sender_user_obj.email_address in sender_mail_id_list or \
@@ -492,9 +545,9 @@ class EmailClient:
 
     def get_mail_objects_of_given_subject(self, delete_rule_file_path: str, match_subject_string: str,
                                           loop_wait_time: int = 2, number_of_mails=10, fetch_unread=False,
-                                          mark_read=True) -> List[Email]:
+                                          mark_read=True) -> List[EmailHandler]:
         return_email_obj_list = []
-        email_list: List[Email] = \
+        email_list: List[EmailHandler] = \
             self.read_mail(number_of_mails=number_of_mails, unread=fetch_unread, mark_read=mark_read)
         for email_obj in email_list:
 
