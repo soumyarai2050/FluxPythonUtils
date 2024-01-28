@@ -64,7 +64,7 @@ class WSReader(WSReaderLite):
     def read_pydantic_obj_list(json_data, PydanticClassListType):
         try:
             # how do we safely & efficiently test if JSON data is of type list, to avoid except & return None instead?
-            pydantic_obj_list = PydanticClassListType(__root__=json_data)
+            pydantic_obj_list = PydanticClassListType(root=json_data)
             return pydantic_obj_list
         except Exception as e:
             logging.exception(f"list type: {PydanticClassListType} json decode failed;;;json_data: {json_data}, "
@@ -97,7 +97,7 @@ class WSReader(WSReaderLite):
         elif isinstance(json_data, list):
             pydantic_obj_list = WSReader.read_pydantic_obj_list(json_data, ws_cont.PydanticClassTypeList)
             if pydantic_obj_list is not None:
-                for pydantic_obj in pydantic_obj_list.__root__:
+                for pydantic_obj in pydantic_obj_list.root:
                     WSReader.dispatch_pydantic_obj(pydantic_obj, ws_cont.callback)
         else:
             logging.error(f"Dropping update: loaded json from json_str is not instance of list or dict, "

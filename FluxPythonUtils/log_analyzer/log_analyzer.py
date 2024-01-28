@@ -51,9 +51,9 @@ class LogDetail(BaseModel):
     process: subprocess.Popen | None = None
     poll_timeout: float = 60.0   # seconds
     processed_timestamp: str | None = None
-    last_processed_utc_datetime: DateTime | None = None
-    class Config:
-        arbitrary_types_allowed = True  # required to use WebSocket as field type since it is arbitrary type
+    last_processed_utc_datetime: DateTime = DateTime.utcnow()
+    # required to use WebSocket as field type since it is arbitrary type
+    model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
 
 
 class LogAnalyzer(ABC):

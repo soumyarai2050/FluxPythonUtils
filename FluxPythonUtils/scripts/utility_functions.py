@@ -221,7 +221,7 @@ def pandas_df_to_pydantic_obj_list(read_df, PydanticType: BaseModelOrItsDerivedT
                                    rename_col_names_to_snake_case: bool = False,
                                    rename_col_names_to_lower_case: bool = True):
     class PydanticClassTypeList(BaseModel):
-        __root__: List[PydanticType]
+        root: List[PydanticType]
 
     if rename_col_names_to_snake_case:
         # replace any space in col name with _ and convert name to snake_case
@@ -240,9 +240,9 @@ def pandas_df_to_pydantic_obj_list(read_df, PydanticType: BaseModelOrItsDerivedT
         read_df.rename(columns=old_to_new_col_name_dict, inplace=True)
     read_df = pd.DataFrame(read_df).replace({'': None})
     data_dict_list = read_df.to_dict(orient='records')
-    record_dict = {"__root__": data_dict_list}
+    record_dict = {"root": data_dict_list}
     pydantic_obj_list: PydanticClassTypeList = PydanticClassTypeList(**record_dict)
-    return pydantic_obj_list.__root__
+    return pydantic_obj_list.root
 
 
 def dict_or_list_records_csv_reader(file_name: str, PydanticType: BaseModelOrItsDerivedType,
