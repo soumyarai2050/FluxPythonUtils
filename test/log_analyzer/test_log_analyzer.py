@@ -12,7 +12,7 @@ from threading import Thread
 
 # 3rd party imports
 from pendulum import DateTime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from fastapi.encoders import jsonable_encoder
 
 # project imports
@@ -216,9 +216,7 @@ class MockRawPerformanceData(BaseModel):
     start_time_it_val: float | None = None
     end_time_it_val: float | None = None
     delta: float | None = None
-
-    class Config:
-        allow_population_by_field_name = True
+    model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
 
 
 @pytest.fixture(scope="function")
@@ -270,6 +268,9 @@ class MockLogAnalyzer(LogAnalyzer):
         no_activity_log_detail_list.append(log_detail)
 
     def notify_tail_error_in_log_service(self, brief_msg_str: str, detail_msg_str: str):
+        pass
+
+    def notify_error(self, error_msg: str):
         pass
 
     def handle_test_matched_log_message(self, log_prefix: str, log_message: str, log_detail: LogDetail):
@@ -440,9 +441,7 @@ def test_log_matched_web_client_call(config_logger_n_get_log_details):
 class SampleBaseModel(BaseModel):
     id: int | None = Field(alias='_id')
     message: str | None = None
-
-    class Config:
-        allow_population_by_field_name = True
+    model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
 
 
 class MockPatchClientError(Exception):

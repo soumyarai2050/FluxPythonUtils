@@ -868,56 +868,67 @@ def compare_n_patch_list(stored_list: List, updated_list: List):
     if stored_list:
         # get datatype of 1st list element, others must be same datatype (multi datatype list patch not-supported)
         if isinstance(stored_list[0], list):  # list of list
-            if isinstance(updated_list[0], list):
-                for underlying_updated_list in updated_list:
-                    underlying_stored_list = _find_matching_list(underlying_updated_list, stored_list)
-                    if underlying_stored_list is None:
+            # Validation all elements of updated list must be of list type
+            for nested_updated_list in updated_list:
+                if not isinstance(nested_updated_list, list):
+                    err_str = (f"element from updated list is of different type than stored elements type: "
+                               f"Must be list found one element of type {type(nested_updated_list)} - "
+                               f"Ignoring this update call;;; mismatched element: {nested_updated_list}, "
+                               f"update_list: {updated_list}")
+                    logging.exception(err_str)
+                    raise Exception(err_str)
+
+            for nested_updated_list in updated_list:
+                    nested_stored_list = _find_matching_list(nested_updated_list, stored_list)
+                    if nested_stored_list is None:
                         # this underlying updated list is new - append to stored_list (stored list of list)
-                        stored_list.append(underlying_updated_list)
+                        stored_list.append(nested_updated_list)
                     else:
-                        compare_n_patch_list(underlying_stored_list, underlying_updated_list)
-            else:
-                err_str = "updated_list's elements are not same datatypes as stored_list's elements;;;"
-                logging.exception(err_str)
-                raise Exception(err_str)
+                        compare_n_patch_list(nested_stored_list, nested_updated_list)
+
         elif isinstance(stored_list[0], dict):
+            # Validation all elements of updated list must be of dict type
+            for update_dict in updated_list:
+                if not isinstance(update_dict, dict):
+                    err_str = (f"element from updated list is of different type than stored elements type: "
+                               f"Must be dict found one element with type {type(update_dict)} - "
+                               f"ignoring this update call;;; mismatched element: {update_dict}, "
+                               f"update_list: {updated_list}")
+                    logging.exception(err_str)
+                    raise Exception(err_str)
+
             # If elements are of dict type then checking if id key is present in elements
             if stored_list[0].get("_id") is not None:
                 stored_id_idx_dict: Dict = {stored_obj.get("_id"): idx for idx, stored_obj in enumerate(stored_list)}
                 for index, update_dict in enumerate(updated_list):
-                    if isinstance(update_dict, dict):
-                        if (updated_id := update_dict.get("_id")) is not None:
-                            # If id is new then appending update_dict to main list
-                            if updated_id not in stored_id_idx_dict:
-                                # If update_dict only has id and the id is not in stored_list - avoid append
-                                # Update list has id checked above + len == 1 confirms all it has is id
-                                if len(update_dict) == 1:
-                                    err_str = ("repeated update obj only has id and that id value is not found in any "
-                                               f"existing repeated objects - ignoring this update, "
-                                               f"update object: {update_dict}")
-                                    logging.exception(err_str)
-                                    raise Exception(err_str)
-                                else:
-                                    stored_list.append(update_dict)
+                    if (updated_id := update_dict.get("_id")) is not None:
+                        # If id is new then appending update_dict to main list
+                        if updated_id not in stored_id_idx_dict:
+                            # If update_dict only has id and the id is not in stored_list - avoid append
+                            # Update list has id checked above + len == 1 confirms all it has is id
+                            if len(update_dict) == 1:
+                                err_str = ("repeated update obj only has id and that id value is not found in any "
+                                           f"existing repeated objects - ignoring this update, "
+                                           f"update object: {update_dict}")
+                                logging.exception(err_str)
+                                raise Exception(err_str)
                             else:
-                                stored_index = stored_id_idx_dict[updated_id]
-                                # If update_dict only has id and the id is same as in stored_list - delete entry
-                                # Update list has id checked above + len == 1 confirms all it has is id
-                                if len(update_dict) == 1:
-                                    stored_list.remove(stored_list[stored_index])
-                                    stored_id_idx_dict = \
-                                        {stored_obj.get("_id"): idx for idx, stored_obj in enumerate(stored_list)}
-                                else:
-                                    # patch operation on dict in stored_list to update
-                                    stored_list[stored_index] = \
-                                        compare_n_patch_dict(stored_list[stored_index], update_dict)
+                                stored_list.append(update_dict)
                         else:
-                            err_str = "updated_list's dict elements don't have id field but stored_list's " \
-                                      "elements do;;;"
-                            logging.exception(err_str)
-                            raise Exception(err_str)
+                            stored_index = stored_id_idx_dict[updated_id]
+                            # If update_dict only has id and the id is same as in stored_list - delete entry
+                            # Update list has id checked above + len == 1 confirms all it has is id
+                            if len(update_dict) == 1:
+                                stored_list.remove(stored_list[stored_index])
+                                stored_id_idx_dict = \
+                                    {stored_obj.get("_id"): idx for idx, stored_obj in enumerate(stored_list)}
+                            else:
+                                # patch operation on dict in stored_list to update
+                                stored_list[stored_index] = \
+                                    compare_n_patch_dict(stored_list[stored_index], update_dict)
                     else:
-                        err_str = "updated_list's elements are not same datatypes as stored_list's elements"
+                        err_str = "updated_list's dict elements don't have id field but stored_list's " \
+                                  "elements do;;;"
                         logging.exception(err_str)
                         raise Exception(err_str)
                 return stored_list
@@ -929,8 +940,26 @@ def compare_n_patch_list(stored_list: List, updated_list: List):
             stored_list.extend(updated_list)
             return stored_list
     else:
-        stored_list.extend(updated_list)
-        return stored_list
+        if updated_list:
+            update_dict_type: Type = type(updated_list[0])
+            for update_item in updated_list:
+                # Validating all elements of update list with taking first element as reference
+                if not type(update_item) == update_dict_type:
+                    err_str = (f"All updated_list's elements must be of same type, found mismatch in element types "
+                               f"- ignoring this update call;;; "
+                               f"updated_list: {update_item}")
+                    logging.exception(err_str)
+                    raise Exception(err_str)
+
+                # checking no update dict element is found for delete since stored dict is completely empty
+                if update_dict_type == dict:
+                    if update_item.get("_id") is not None and len(update_item) == 1:
+                        err_str = ("Unexpected: updated_list contains dict element with only id set but stored "
+                                   f"list is empty - ignoring this update call;;; update_list: {updated_list}")
+                        logging.exception(err_str)
+                        raise Exception(err_str)
+
+            stored_list.extend(updated_list)
 
 
 def compare_n_patch_dict(stored_dict: Dict, updated_dict: Dict):
@@ -1096,8 +1125,19 @@ def year_month_day_str_from_datetime(any_date: datetime = datetime.now()) -> Tup
         return None, None, None
 
 
+def get_timeit_pattern() -> str:
+    return "_timeit_"
+
+
+def get_timeit_field_separator() -> str:
+    return "~"
+
+
 def get_time_it_log_pattern(callable_name: str, start_time: DateTime, delta: float):
-    pattern_str = f"_timeit_{callable_name}~{start_time}~{delta}_timeit_"
+    time_it_pattern: str = get_timeit_pattern()
+    field_separator: str = get_timeit_field_separator()
+    pattern_str = (f"{time_it_pattern}{callable_name}{field_separator}{start_time}"
+                   f"{field_separator}{delta}{time_it_pattern}")
     return pattern_str
 
 
@@ -1277,9 +1317,14 @@ async def execute_tasks_list_with_first_completed(tasks_list: List[asyncio.Task]
                                     f"{completed_task.get_name()};;; Exception: {e}")
 
 
+def get_symbol_side_pattern():
+    return "%%"
+
+
 def get_symbol_side_key(symbol_side_tuple_list: List[Tuple[str, str]]) -> str:
+    symbol_side_pattern: str = get_symbol_side_pattern()
     key_str = ",".join([f"symbol-side={symbol}-{side}" for symbol, side in symbol_side_tuple_list])
-    return f"%%{key_str}%%"
+    return f"{symbol_side_pattern}{key_str}{symbol_side_pattern}"
 
 
 def except_n_log_alert():

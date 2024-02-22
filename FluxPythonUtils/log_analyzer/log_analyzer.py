@@ -20,7 +20,8 @@ from pydantic import BaseModel, ConfigDict
 from pendulum import DateTime, parse
 
 # project imports
-from FluxPythonUtils.scripts.utility_functions import parse_to_float, parse_to_int
+from FluxPythonUtils.scripts.utility_functions import (parse_to_float, parse_to_int, get_timeit_pattern,
+                                                       get_timeit_field_separator)
 
 perf_benchmark_log_prefix_regex_pattern: str = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} : (" \
                                                r"TIMING) : \[[a-zA-Z._]* : \d*] : "
@@ -58,15 +59,21 @@ class LogDetail(BaseModel):
 
 class LogAnalyzer(ABC):
     timestamp_regex_pattern: str = r'\b\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}\b'
+    max_str_size_in_bytes: int = 2048
+    log_seperator: str = ';;;'
 
     def __init__(self, regex_file: str, config_yaml_dict: Dict, performance_benchmark_webclient_object,
                  raw_performance_data_model_type: Type[BaseModel],
                  log_details: List[LogDetail] | None = None,
-                 log_prefix_regex_pattern_to_callable_name_dict: Dict[str, str] | None = None):
+                 log_prefix_regex_pattern_to_callable_name_dict: Dict[str, str] | None = None,
+                 log_detail_type: Type[LogDetail] | None = None):
         self.regex_file: str = regex_file
         self.regex_file_lock: Lock = Lock()
         self.regex_file_data_snapshot_version: float | None = None
         self.regex_list: List[str] = list()
+        self.log_detail_type = log_detail_type
+        if log_detail_type is None:
+            self.log_detail_type: Type[LogDetail] = LogDetail
 
         self.config_yaml_dict: Dict = config_yaml_dict
         self.webclient_object = performance_benchmark_webclient_object
@@ -76,6 +83,8 @@ class LogAnalyzer(ABC):
         self.log_prefix_regex_pattern_to_callable_name_dict: Dict[str, str] = \
             log_prefix_regex_pattern_to_callable_name_dict \
             if log_prefix_regex_pattern_to_callable_name_dict is not None else {}
+        self.timeit_pattern: str = get_timeit_pattern()
+        self.timeit_field_separator: str = get_timeit_field_separator()
 
         self.log_file_path_to_log_detail_dict: Dict[str, LogDetail] = {}
         self.signal_handler_lock: Lock = Lock()
@@ -144,15 +153,17 @@ class LogAnalyzer(ABC):
                         logging.debug(f"Calling Error handler func provided with param: {non_existing_obj}")
                         err_handling_callable(non_existing_obj)
                     elif "Failed to establish a new connection: [Errno 111] Connection refused" in str(e):
-                        logging.error(f"Connection Error occurred while calling {web_client_callable.__name__}, "
-                                      f"will stay on wait for 5 secs and again retry - ignoring all data for this call")
+                        logging.exception(
+                            f"Connection Error occurred while calling {web_client_callable.__name__}, "
+                            f"will stay on wait for 5 secs and again retry - ignoring all data for this call")
 
                         if client_connection_fail_retry_secs is None:
                             client_connection_fail_retry_secs = 5*60    # 5 minutes
                         time.sleep(client_connection_fail_retry_secs)
                     else:
-                        logging.error(f"Some Error Occurred while calling {web_client_callable.__name__}, "
-                                      f"sending all updates to err_handling_callable, {str(e)}")
+                        logging.exception(
+                            f"Some Error Occurred while calling {web_client_callable.__name__}, "
+                            f"sending all updates to err_handling_callable, {str(e)}")
                         err_handling_callable(pydantic_obj_list)
                 pydantic_obj_list.clear()  # cleaning list to start fresh cycle
             oldest_entry_time = DateTime.utcnow()
@@ -160,7 +171,8 @@ class LogAnalyzer(ABC):
 
     def run(self):
         if self.log_details is None or len(self.log_details) == 0:
-            raise Exception(f"No log files provided for analysis;;; log_details: {self.log_details}")
+            raise Exception(f"No log files provided for analysis{LogAnalyzer.log_seperator} "
+                            f"log_details: {self.log_details}")
 
         # adding all log_details to non_existing_log_details list and keep removing those found
         # existing dynamically
@@ -187,19 +199,18 @@ class LogAnalyzer(ABC):
                             service: str = (
                                 self.pattern_matched_added_file_path_to_service_dict)[pattern_matched_file_path]
                             if service != log_detail.service:
-                                logging.error("Dropping This LogDetail: Found log_analyzer init request for "
-                                              "unix-pattern matched file having same service and file_name already "
-                                              f"present in running log_analyzer's cache ;;; log_detail: {log_detail}, "
-                                              f"pattern_matched_file_path: {pattern_matched_file_path}")
+                                err_str_ = ("Dropping This LogDetail: Found log_analyzer init request for "
+                                            "unix-pattern matched file having same service and file_name already "
+                                            f"present in running log_analyzer's cache {LogAnalyzer.log_seperator} "
+                                            f"log_detail: {log_detail}, "
+                                            f"pattern_matched_file_path: {pattern_matched_file_path}")
+                                logging.error(err_str_)
+                                self.notify_error(err_str_)
                             # else not required: would be a file which got tracked by glob again due to pattern
                             continue
 
-                        new_log_detail = LogDetail(service=log_detail.service,
-                                                   log_file_path=pattern_matched_file_path,
-                                                   critical=log_detail.critical,
-                                                   log_prefix_regex_pattern_to_callable_name_dict=
-                                                   log_detail.log_prefix_regex_pattern_to_callable_name_dict,
-                                                   log_file_path_is_regex=log_detail.log_file_path_is_regex)
+                        new_log_detail = self.log_detail_type(**log_detail.model_dump())
+                        new_log_detail.log_file_path = pattern_matched_file_path
                         self.log_details_queue.put(new_log_detail)
 
                         self.pattern_matched_added_file_path_to_service_dict[pattern_matched_file_path] = (
@@ -261,22 +272,6 @@ class LogAnalyzer(ABC):
                 return True
             # else not required if both regex file is not present and regex list is empty. returning False
             return False
-
-    # def _signal_handler(self, signal_type: int, *args) -> None:
-    #     logging.warning(f"{signal.Signals(signal_type).name} received. Gracefully terminating all subprocess.")
-    #     if not self.run_mode:
-    #         logging.warning("run_mode already set to False. ignoring")
-    #         sys.exit(0)
-    #     logging.info("Setting run_mode to False")
-    #     self.run_mode = False
-    #
-    #     for thread in self.running_log_analyzer_thread_list:
-    #         thread.join()
-    #
-    #     for process in self.process_list:
-    #         process.kill()
-    #     self.process_list.clear()
-    #     sys.exit(0)
 
     def _listen(self, log_detail: LogDetail) -> None:
         thread: Thread = current_thread()
@@ -353,7 +348,7 @@ class LogAnalyzer(ABC):
                         if "tail:" in line and "giving up on this name" in line:
                             brief_msg_str: str = (f"tail error encountered in log service: {log_detail.service}, "
                                                   f"restarting...")
-                            logging.critical(f"{brief_msg_str};;;{line}")
+                            logging.critical(f"{brief_msg_str}{LogAnalyzer.log_seperator}{line}")
                             self.notify_tail_error_in_log_service(brief_msg_str, line)
                             return
 
@@ -373,18 +368,44 @@ class LogAnalyzer(ABC):
                                 self._get_log_prefix_n_message(log_line=line,
                                                                log_prefix_pattern=log_prefix_regex_pattern)
 
+                            # reducing the size of log_message brief if exceeds limit before
+                            # going to check skil patterns
+                            log_seperator_index = log_message.find(LogAnalyzer.log_seperator)
+                            if log_seperator_index != -1:
+                                log_msg_brief = log_message[:log_seperator_index]
+                            else:
+                                # if log_seperator is found in log then taking whole log_message as strat_brief
+                                log_msg_brief = log_message
+
+                            if self._is_str_limit_breached(log_msg_brief):
+                                log_msg_brief = log_msg_brief[:LogAnalyzer.max_str_size_in_bytes]
+
+                                if log_seperator_index != -1:
+                                    err_str = ("Log string brief is too long, adjusting the string length for "
+                                               f"optimization reasons - please reduce the size of log brief, "
+                                               f"adjusted log brief: {log_msg_brief}")
+                                else:
+                                    err_str = ("Log string doesn't contain log seperator to slice msg brief from it "
+                                               "and whole log string is too long, adjusting the string length for "
+                                               f"optimization reasons - please use log_seperator: "
+                                               f"{LogAnalyzer.log_seperator} to specify brief and detail in log, "
+                                               f"adjusted log brief: {log_msg_brief}")
+
+                                self.notify_error(err_str)
+
                             regex_match: bool = False
                             for regex_pattern in self.regex_list:
                                 try:
-                                    if re.compile(fr"{regex_pattern}").search(log_message):
-                                        logging.info(f"regex pattern matched, skipping;;; "
-                                                     f"log_message: {log_message[:200]}")
+                                    if re.compile(fr"{regex_pattern}").search(log_msg_brief):
+                                        logging.info(f"regex pattern matched, skipping{LogAnalyzer.log_seperator} "
+                                                     f"log_message: {log_msg_brief[:200]}")
                                         regex_match = True
                                         break
                                 except re.error as e:
                                     err_str_ = (f"Failed to compile regex pattern, pattern: {regex_pattern}, "
                                                 f"exception: {e}")
-                                    logging.error(err_str_)
+                                    logging.exception(err_str_)
+                                    self.notify_error(err_str_)
                             # ignore processing the log line that matches the regex list
                             if regex_match:
                                 break
@@ -393,9 +414,11 @@ class LogAnalyzer(ABC):
                             try:
                                 match_callable: Callable = getattr(self, callable_name)
                             except AttributeError as e:
-                                logging.error(f"Couldn't find callable {callable_name} in inherited log_analyzer, "
-                                              f"exception: {e}, inheriting log_analyzer name: "
-                                              f"{self.__class__.__name__}")
+                                err_str_ = (f"Couldn't find callable {callable_name} in inherited log_analyzer, "
+                                            f"exception: {e}, inheriting log_analyzer name: "
+                                            f"{self.__class__.__name__}")
+                                logging.exception(err_str_)
+                                self.notify_error(err_str_)
                             if match_callable:
                                 match_callable(log_prefix, log_message, log_detail)
 
@@ -410,14 +433,18 @@ class LogAnalyzer(ABC):
                     # check for new logs
 
             except Exception as e:
-                logging.exception(f"_analyze_log failed;;; exception: {e}")
-                # with self.signal_handler_lock:
-                #     if self.run_mode:
-                        # self._signal_handler(signal.Signals.SIGTERM)
+                err_str_ = f"_analyze_log failed{LogAnalyzer.log_seperator} exception: {e}"
+                logging.exception(err_str_)
+                self.notify_error(err_str_)
 
-    def _truncate_str(self, text: str, max_size_in_bytes: int = 2048) -> str:
-        if len(text.encode("utf-8")) > max_size_in_bytes:
-            text = text.encode("utf-8")[:max_size_in_bytes].decode()
+    def _is_str_limit_breached(self, text: str) -> bool:
+        if len(text.encode("utf-8")) > LogAnalyzer.max_str_size_in_bytes:
+            return True
+        return False
+
+    def _truncate_str(self, text: str) -> str:
+        if self._is_str_limit_breached(text):
+            text = text.encode("utf-8")[:LogAnalyzer.max_str_size_in_bytes].decode()
             service_detail: LogDetail = getattr(current_thread(), "service_detail")
             text += f"...check the file: {service_detail.log_file_path} to see the entire log"
         return text
@@ -429,11 +456,11 @@ class LogAnalyzer(ABC):
         return [log_prefix, log_message_without_prefix]
 
     def handle_perf_benchmark_matched_log_message(self, log_prefix: str, log_message: str, log_detail: LogDetail):
-        pattern = re.compile("_timeit_.*_timeit_")
+        pattern = re.compile(f"{self.timeit_pattern}.*{self.timeit_pattern}")
         if search_obj := re.search(pattern, log_message):
             found_pattern = search_obj.group()
             found_pattern = found_pattern[8:-8]  # removing beginning and ending _timeit_
-            found_pattern_list = found_pattern.split("~")  # splitting pattern values
+            found_pattern_list = found_pattern.split(self.timeit_field_separator)  # splitting pattern values
             if len(found_pattern_list) == 3:
                 callable_name, start_time, delta = found_pattern_list
                 if callable_name != "underlying_create_raw_performance_data_http":
@@ -473,3 +500,11 @@ class LogAnalyzer(ABC):
         """
         raise NotImplementedError("notify_tail_error_in_log_service not implemented in derived class")
 
+    @abstractmethod
+    def notify_error(self, error_msg: str):
+        """
+        Handling to be implemented to notify in derived class when some error occurred in base log_analyzer class
+        :param error_msg: error msg to be notified by derived implementation
+        :return: None
+        """
+        raise NotImplementedError("notify_error not implemented in derived class")
