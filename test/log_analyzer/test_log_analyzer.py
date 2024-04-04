@@ -308,7 +308,7 @@ def test_dynamic_log_files_load_and_start_tail():
 
     mock_log_analyzer = MockLogAnalyzer(log_detail_list)
 
-    thread = threading.Thread(target=mock_log_analyzer.run, daemon=True)
+    thread = threading.Thread(target=mock_log_analyzer.log_file_watcher, daemon=True)
     thread.start()
 
     # checking if no process exist for files before files doesn't exist
@@ -354,7 +354,7 @@ def test_dynamic_pattern_load_and_start_tail():
 
     mock_log_analyzer = MockLogAnalyzer(log_detail_list)
 
-    thread = threading.Thread(target=mock_log_analyzer.run, daemon=True)
+    thread = threading.Thread(target=mock_log_analyzer.log_file_watcher, daemon=True)
     thread.start()
 
     # creating files and checking dynamic feature
@@ -390,7 +390,7 @@ def test_no_activity(config_logger_n_get_log_details):
 
     mock_log_analyzer = MockLogAnalyzer(log_details)
 
-    thread = threading.Thread(target=mock_log_analyzer.run, daemon=True)
+    thread = threading.Thread(target=mock_log_analyzer.log_file_watcher, daemon=True)
     thread.start()
 
     logging.testrun("Mock log message")
@@ -414,7 +414,7 @@ def test_log_matched_web_client_call(config_logger_n_get_log_details):
 
     mock_log_analyzer = MockLogAnalyzer(log_details)
 
-    thread = threading.Thread(target=mock_log_analyzer.run, daemon=True)
+    thread = threading.Thread(target=mock_log_analyzer.log_file_watcher, daemon=True)
     thread.start()
 
     assert not mock_client_callable_data_list, \

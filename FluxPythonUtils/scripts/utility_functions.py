@@ -1340,7 +1340,7 @@ def except_n_log_alert():
                                    f"date-time: {DateTime.now()}"
                 alert_details: str = f"{exc_type}: file: {filename}, line: {exc_tb.tb_lineno}, args: {args}, " \
                                      f"kwargs: {kwargs}"
-                logging.error(f"{alert_brief};;; {alert_details}")
+                logging.exception(f"{alert_brief};;; {alert_details}")
             return result
         return wrapper_function
     return decorator_function
@@ -1427,20 +1427,74 @@ def get_pid_from_port(port: int):
 
     return None
 
+# @@@ deprecated: not recommended for first choice - only use if really required
+# def is_process_running(pid: int) -> bool:
+#     try:
+#         process = psutil.Process(pid)
+#         try:
+#             # wait is required to retrieve the exit status else killed/terminated background subprocess
+#             # remains defunct and is_running() returns True - raises TimeoutExpired if no status found
+#             # within timout period, meaning process is running
+#             # BONUS info: we can use process.poll() without also instead of wait if we had
+#             # subprocess.popen object to check its status - process.poll() returns None till process
+#             # is running and once it is completed it returns exit code of process
+#             process.wait(1)
+#         except psutil.TimeoutExpired:
+#             return True
+#         return process.is_running()
+#     except psutil.NoSuchProcess:
+#         return False
 
-def is_process_running(pid: int) -> bool:
-    try:
-        process = psutil.Process(pid)
-        try:
-            # wait is required to retrieve the exit status else killed/terminated background subprocess
-            # remains defunct and is_running() returns True - raises TimeoutExpired if no status found
-            # within timout period, meaning process is running
-            # BONUS info: we can use process.poll() without also instead of wait if we had
-            # subprocess.popen object to check its status - process.poll() returns None till process
-            # is running and once it is completed it returns exit code of process
-            process.wait(1)
-        except psutil.TimeoutExpired:
-            return True
-        return process.is_running()
-    except psutil.NoSuchProcess:
-        return False
+
+def re_pattern_to_grep(pattern: str) -> str:
+    # Escape characters that have special meaning in grep
+    pattern = pattern.replace("+", "\\+")
+    pattern = pattern.replace("?", "\\?")
+    pattern = pattern.replace("|", "\\|")
+    pattern = pattern.replace("(", "\\(")
+    pattern = pattern.replace(")", "\\)")
+    pattern = pattern.replace("{", "\\{")
+    pattern = pattern.replace("}", "\\}")
+
+    # Convert python regex syntax to grep syntax
+    pattern = pattern.replace("\\d", "[0-9]")
+    pattern = pattern.replace("\\D", "[^0-9]")
+    pattern = pattern.replace("\\s", "[[:space:]]")
+    pattern = pattern.replace("\\S", "[^[:space:]]")
+    pattern = pattern.replace("\\w", "[a-zA-Z0-9_]")
+    pattern = pattern.replace("\\W", "[^a-zA-Z0-9_]")
+
+    return pattern
+
+
+def get_log_line_no_from_timestamp(log_file_path: str, timestamp: str) -> str | None:
+    cmd = f'awk -v start_time="{timestamp}" \'$1" "$2 >= start_time ' + '{print NR; exit}\'' + f'"{log_file_path}"'
+    out = subprocess.check_output(cmd, shell=True)
+    line_no = out.decode("utf-8")
+    if not line_no:
+        return None
+    return f"+{line_no}"
+
+
+def get_last_log_line_date_time(log_file_path: str) -> str | None:
+    cmd = f"tail -n 1 {log_file_path} | awk " + "'{print $1, $2}'"
+    out = subprocess.check_output(cmd, shell=True)
+    line_no = out.decode("utf-8")
+    if not line_no:
+        return None
+    return line_no.strip()
+
+
+def run_gbd_terminal_with_pid(pid: int, show_msg: str | None = None):
+    # Define the commands you want to run
+    if show_msg is None:
+        show_msg = f"Terminal for PID: {pid}"
+    commands = [
+        f"echo '{show_msg}'",
+        f"gdb -p {pid}",
+        "c"
+    ]
+
+    # Open a single terminal window and run the commands
+    terminal_command = " && ".join(commands) + " && bash"
+    subprocess.Popen(["gnome-terminal", "--", "bash", "-c", terminal_command])
