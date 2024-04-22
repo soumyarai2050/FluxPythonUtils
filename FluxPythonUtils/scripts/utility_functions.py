@@ -33,7 +33,7 @@ import subprocess
 from pydantic import BaseModel
 import pandas as pd
 from pymongo import MongoClient
-import pymongoarrow.monkey
+# import pymongoarrow.monkey
 from beanie.odm.documents import DocType
 from pendulum import DateTime
 from fastapi import WebSocket
@@ -43,7 +43,8 @@ from fastapi import HTTPException
 from FluxPythonUtils.scripts.yaml_importer import YAMLImporter
 
 # Adds extra utility methods of pymongoarrow.monkey to pymongo collection objects
-pymongoarrow.monkey.patch_all()
+# https://mongo-arrow.readthedocs.io/en/pymongoarrow-0.1.1/quickstart.html#extending-pymongo
+# pymongoarrow.monkey.patch_all()   # not being used currently + causing issues in cpp so file usage in ctypes.CDLL
 
 BaseModelOrItsDerivedType = TypeVar('BaseModelOrItsDerivedType', BaseModel, Callable)
 
@@ -1445,6 +1446,17 @@ def get_pid_from_port(port: int):
 #     except psutil.NoSuchProcess:
 #         return False
 
+def is_process_running(pid: int) -> bool:
+    if psutil.pid_exists(pid):
+        try:
+            process = psutil.Process(pid)
+            if process.status() == psutil.STATUS_ZOMBIE:
+                return False
+            return True
+        except psutil.NoSuchProcess:
+            return False
+    return False
+
 
 def re_pattern_to_grep(pattern: str) -> str:
     # Escape characters that have special meaning in grep
@@ -1468,12 +1480,38 @@ def re_pattern_to_grep(pattern: str) -> str:
 
 
 def get_log_line_no_from_timestamp(log_file_path: str, timestamp: str) -> str | None:
-    cmd = f'awk -v start_time="{timestamp}" \'$1" "$2 >= start_time ' + '{print NR; exit}\'' + f'"{log_file_path}"'
-    out = subprocess.check_output(cmd, shell=True)
-    line_no = out.decode("utf-8")
-    if not line_no:
+    if not os.path.exists(log_file_path):
         return None
-    return f"+{line_no}"
+
+    grep_timestamp_pattern: str = timestamp
+    timestamp_pattern_list: List[str] = [grep_timestamp_pattern]
+    while True:
+        # generate patterns for time only
+        last_timestamp_char: str = grep_timestamp_pattern[-1]
+        if last_timestamp_char == " " or last_timestamp_char == "-":
+            break
+        if last_timestamp_char == ":" or last_timestamp_char == ",":
+            grep_timestamp_pattern = grep_timestamp_pattern[:-2]
+        else:
+            grep_timestamp_pattern = grep_timestamp_pattern[:-1]
+        timestamp_pattern_list.append(grep_timestamp_pattern)
+
+    grep_cmd_list: List[str] = [f"grep -n '^{timestamp_pattern}' {log_file_path}" for timestamp_pattern
+                                in timestamp_pattern_list]
+    cmd: str = f"({' || '.join(grep_cmd_list)}) | head -n 1"
+    logging.debug(f"fetching line no for {timestamp=}, {cmd=}")
+    process: subprocess.Popen = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                                 text=True)
+    output, error = process.communicate()
+
+    if error:
+        logging.error(f"get_log_line_no_from_timestamp failed, {error=}")
+        return None
+    if output:
+        closest_line_no: str = output.split(":")[0]
+        return f"+{closest_line_no}"
+    # else return None in all other case
+    return None
 
 
 def get_last_log_line_date_time(log_file_path: str) -> str | None:
