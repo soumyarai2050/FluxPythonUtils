@@ -1146,14 +1146,46 @@ def get_time_it_log_pattern(callable_name: str, start_time: DateTime, delta: flo
 def perf_benchmark(func_callable):
     @functools.wraps(func_callable)
     async def benchmarker(*args, **kwargs):
-        call_date_time = DateTime.utcnow()
-        start_time = timeit.default_timer()
-        return_val = await func_callable(*args, **kwargs)
-        end_time = timeit.default_timer()
-        delta = parse_to_float(f"{(end_time - start_time):.6f}")
+        lvl_names_mapping = logging.getLevelNamesMapping()
 
-        pattern_str = get_time_it_log_pattern(func_callable.__name__, call_date_time, delta)
-        logging.timing(pattern_str)
+        if "TIMING" in lvl_names_mapping:
+            logger = logging.getLogger()
+            if logger.getEffectiveLevel() <= logging.TIMING:
+                call_date_time = DateTime.utcnow()
+                start_time = timeit.default_timer()
+                return_val = await func_callable(*args, **kwargs)
+                end_time = timeit.default_timer()
+                delta = parse_to_float(f"{(end_time - start_time):.6f}")
+
+                pattern_str = get_time_it_log_pattern(func_callable.__name__, call_date_time, delta)
+                logging.timing(pattern_str)
+            else:
+                return_val = await func_callable(*args, **kwargs)
+        else:
+            return_val = await func_callable(*args, **kwargs)
+        return return_val
+    return benchmarker
+
+
+def perf_benchmark_sync_callable(func_callable):
+    def benchmarker(*args, **kwargs):
+        lvl_names_mapping = logging.getLevelNamesMapping()
+
+        if "TIMING" in lvl_names_mapping:
+            logger = logging.getLogger()
+            if logger.getEffectiveLevel() <= logging.TIMING:
+                call_date_time = DateTime.utcnow()
+                start_time = timeit.default_timer()
+                return_val = func_callable(*args, **kwargs)
+                end_time = timeit.default_timer()
+                delta = parse_to_float(f"{(end_time - start_time):.6f}")
+
+                pattern_str = get_time_it_log_pattern(func_callable.__name__, call_date_time, delta)
+                logging.timing(pattern_str)
+            else:
+                return_val = func_callable(*args, **kwargs)
+        else:
+            return_val = func_callable(*args, **kwargs)
         return return_val
     return benchmarker
 
@@ -1316,6 +1348,34 @@ async def execute_tasks_list_with_first_completed(tasks_list: List[asyncio.Task]
             except Exception as e:
                 logging.debug('\n', f"execute_tasks_list_with_first_completed failed for task "
                                     f"{completed_task.get_name()};;; Exception: {e}")
+
+
+async def submit_task_with_first_completed_wait(tasks_list: List[asyncio.Task],
+                                                timeout: float = 60.0):
+    res_list = []
+    completed_tasks: Set[asyncio.Task] | None = None
+    pending_tasks: Set[asyncio.Task] | None = None
+    while True:
+        try:
+            completed_tasks, pending_tasks = \
+                await asyncio.wait(tasks_list, return_when=asyncio.FIRST_COMPLETED, timeout=timeout)
+        except Exception as e:
+            logging.exception(f"submit_task_with_first_completed_wait asyncio.wait failed with exception: {e}")
+        while completed_tasks:
+            completed_task = None
+            try:
+                completed_task = completed_tasks.pop()
+                res = completed_task.result()
+                if res is not None:
+                    res_list.append(res)
+            except Exception as e:
+                logging.exception(f"task failed for task_name: {completed_task.get_name()};;; exception: {e}")
+        if pending_tasks:
+            logging.info(f"{len(tasks_list)=}, {len(pending_tasks)=};;; {[task.get_name() for task in pending_tasks]}")
+            tasks_list = [*pending_tasks, ]
+        else:
+            break
+    return res_list
 
 
 def get_symbol_side_pattern():
@@ -1524,15 +1584,30 @@ def get_last_log_line_date_time(log_file_path: str) -> str | None:
 
 
 def run_gbd_terminal_with_pid(pid: int, show_msg: str | None = None):
+    gdb_script: PurePath = PurePath(__file__).parent.parent / "data" / "init.gdb"
     # Define the commands you want to run
     if show_msg is None:
         show_msg = f"Terminal for PID: {pid}"
+        # gdb_script_path: str = ""
     commands = [
         f"echo '{show_msg}'",
-        f"gdb -p {pid}",
-        "c"
+        f"gdb -p {pid} -x {str(gdb_script)}"
     ]
 
     # Open a single terminal window and run the commands
     terminal_command = " && ".join(commands) + " && bash"
     subprocess.Popen(["gnome-terminal", "--", "bash", "-c", terminal_command])
+
+
+def submitted_task_result(future):
+    try:
+        # block for task to finish
+        return future.result()
+    except HTTPException as http_e:
+        err_str_ = f"_task_result failed with http_exception: {http_e.detail}"
+        logging.error(err_str_)
+        raise Exception(err_str_)
+    except Exception as e:
+        err_str_ = f"_task_result failed with exception: {e}"
+        logging.error(err_str_)
+        raise Exception(err_str_)
