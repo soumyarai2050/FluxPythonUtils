@@ -1378,16 +1378,6 @@ async def submit_task_with_first_completed_wait(tasks_list: List[asyncio.Task],
     return res_list
 
 
-def get_symbol_side_pattern():
-    return "%%"
-
-
-def get_symbol_side_key(symbol_side_tuple_list: List[Tuple[str, str]]) -> str:
-    symbol_side_pattern: str = get_symbol_side_pattern()
-    key_str = ",".join([f"symbol-side={symbol}-{side}" for symbol, side in symbol_side_tuple_list])
-    return f"{symbol_side_pattern}{key_str}{symbol_side_pattern}"
-
-
 def except_n_log_alert():
     def decorator_function(original_function):
         def wrapper_function(*args, **kwargs):

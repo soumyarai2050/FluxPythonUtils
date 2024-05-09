@@ -128,6 +128,10 @@ class LogAnalyzer(ABC):
 
             self.tail_update_queue.put("EXIT")
 
+            # deleting lock file for suppress alert regex
+            if os.path.exists(self.regex_lock_file):
+                os.remove(self.regex_lock_file)
+
         # else not required: avoiding multiple terminate calls
 
     @staticmethod
