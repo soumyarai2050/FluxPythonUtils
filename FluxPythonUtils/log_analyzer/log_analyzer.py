@@ -3,6 +3,7 @@ import datetime
 import logging
 import os
 import sys
+import threading
 import time
 from abc import ABC, abstractmethod
 import re
@@ -16,6 +17,7 @@ import queue
 from pathlib import PurePath
 import multiprocessing
 from filelock import FileLock
+import inspect
 
 # 3rd part imports
 from pydantic import BaseModel, ConfigDict
@@ -68,7 +70,7 @@ class LogAnalyzer(ABC):
     max_str_size_in_bytes: int = 2048
     log_seperator: str = ';;;'
 
-    def __init__(self, regex_file_dir_path: str, config_yaml_dict: Dict,
+    def __init__(self, log_detail: LogDetail, regex_file_dir_path: str, config_yaml_dict: Dict,
                  log_prefix_regex_pattern_to_callable_name_dict: Dict[str, str] | None = None):
         self.regex_file_dir_path: str = regex_file_dir_path
 
@@ -102,7 +104,8 @@ class LogAnalyzer(ABC):
         self.signal_handler_lock: Lock = Lock()
         self.log_refresh_threshold: int = 60
         self.log_details_queue: queue.Queue = queue.Queue()
-        self.log_detail: LogDetail | None = None
+        self.log_detail = log_detail
+        self.component_file_path = log_detail.log_file_path
 
         # running refresh_regex_list thread
         refresh_regex_list_thread = Thread(target=self.refresh_regex_list, daemon=True)
@@ -196,45 +199,52 @@ class LogAnalyzer(ABC):
         for log_detail in log_details:
             non_existing_log_details.append(log_detail)
 
-        # pattern matched added files
-        while True:
-            for log_detail in non_existing_log_details:
-                if not log_detail.log_file_path_is_regex:
-                    if os.path.exists(log_detail.log_file_path):
+        try:
+            # pattern matched added files
+            while True:
+                for log_detail in non_existing_log_details:
+                    if not log_detail.log_file_path_is_regex:
+                        if os.path.exists(log_detail.log_file_path):
 
-                        if log_detail.log_file_path not in tail_executor_started_files_cache_dict:
-                            LogAnalyzer._handle_log_file_path_not_regex(log_details_queue, log_detail,
-                                                                        non_existing_log_details)
-                            # avoids any pattern matched file in regex case to get started again
-                            tail_executor_started_files_cache_dict[log_detail.log_file_path] = [log_detail.service]
-                        else:
-                            log_detail_service_list: List[str] = (
-                                tail_executor_started_files_cache_dict.get(log_detail.log_file_path))
-                            if log_detail.service not in log_detail_service_list:
+                            if log_detail.log_file_path not in tail_executor_started_files_cache_dict:
                                 LogAnalyzer._handle_log_file_path_not_regex(log_details_queue, log_detail,
                                                                             non_existing_log_details)
                                 # avoids any pattern matched file in regex case to get started again
-                                tail_executor_started_files_cache_dict[log_detail.log_file_path].append(
-                                    log_detail.service)
-                            # else not required: avoiding duplicate tail executor
-                else:
-                    pattern_matched_file_paths = glob.glob(log_detail.log_file_path)
-                    for pattern_matched_file_path in pattern_matched_file_paths:
-                        # avoiding recently added files with this log_detail object
-                        if pattern_matched_file_path not in tail_executor_started_files_cache_dict:
-                            LogAnalyzer._handle_log_file_path_is_regex(log_detail_type, log_details_queue,
-                                                                       log_detail, pattern_matched_file_path)
-                            tail_executor_started_files_cache_dict[pattern_matched_file_path] = [log_detail.service]
-                        else:
-                            log_detail_service_list: List[str] = (
-                                tail_executor_started_files_cache_dict.get(pattern_matched_file_path))
-                            if log_detail.service not in log_detail_service_list:
+                                tail_executor_started_files_cache_dict[log_detail.log_file_path] = [log_detail.service]
+                            else:
+                                log_detail_service_list: List[str] = (
+                                    tail_executor_started_files_cache_dict.get(log_detail.log_file_path))
+                                if log_detail.service not in log_detail_service_list:
+                                    LogAnalyzer._handle_log_file_path_not_regex(log_details_queue, log_detail,
+                                                                                non_existing_log_details)
+                                    # avoids any pattern matched file in regex case to get started again
+                                    tail_executor_started_files_cache_dict[log_detail.log_file_path].append(
+                                        log_detail.service)
+                                # else not required: avoiding duplicate tail executor
+                    else:
+                        pattern_matched_file_paths = glob.glob(log_detail.log_file_path)
+                        for pattern_matched_file_path in pattern_matched_file_paths:
+                            # avoiding recently added files with this log_detail object
+                            if pattern_matched_file_path not in tail_executor_started_files_cache_dict:
                                 LogAnalyzer._handle_log_file_path_is_regex(log_detail_type, log_details_queue,
                                                                            log_detail, pattern_matched_file_path)
-                                tail_executor_started_files_cache_dict[pattern_matched_file_path].append(
-                                    log_detail.service)
-                            # else not required: avoiding duplicate tail executor
-            time.sleep(0.5)     # delay for while loop
+                                tail_executor_started_files_cache_dict[pattern_matched_file_path] = [log_detail.service]
+                            else:
+                                log_detail_service_list: List[str] = (
+                                    tail_executor_started_files_cache_dict.get(pattern_matched_file_path))
+                                if log_detail.service not in log_detail_service_list:
+                                    LogAnalyzer._handle_log_file_path_is_regex(log_detail_type, log_details_queue,
+                                                                               log_detail, pattern_matched_file_path)
+                                    tail_executor_started_files_cache_dict[pattern_matched_file_path].append(
+                                        log_detail.service)
+                                # else not required: avoiding duplicate tail executor
+                time.sleep(0.5)     # delay for while loop
+        except Exception as e:
+            err_brief = f"log_file_watcher failed with exception: {e}"
+            logging.exception(err_brief)
+            log_file_watcher_err_handler(err_brief, source_file_name=PurePath(__file__).name,
+                                         line_num=inspect.currentframe().f_lineno,
+                                         alert_create_date_time=DateTime.utcnow())
 
     @classmethod
     def run_tail_executor(cls, log_detail, **kwargs):
@@ -242,8 +252,8 @@ class LogAnalyzer(ABC):
         p_name = multiprocessing.current_process().name
         setproctitle.setproctitle(p_name)
 
-        log_analyzer_obj = cls(**kwargs)
-        log_analyzer_obj.listen(log_detail)
+        log_analyzer_obj = cls(log_detail, **kwargs)
+        log_analyzer_obj.listen()
 
     @staticmethod
     def get_process_name(log_detail: LogDetail) -> str:
@@ -265,7 +275,13 @@ class LogAnalyzer(ABC):
             # submitting new tail_executor for new file
             process_name = cls.get_process_name(log_detail)
 
-            log_detail.processed_timestamp = start_datetime_fmt_str
+            # if it is fresh start-up then since tail_executor can take some time to start it can miss some
+            # initial logs so putting time of log analyzer service start which will always be older than tail_executor
+            # start time
+            if log_detail.processed_timestamp is None:
+                log_detail.processed_timestamp = start_datetime_fmt_str
+            # else not required: taking value of processed_timestamp to restart set before passing log_detail to restart
+
             process = spawn.Process(target=cls.run_tail_executor, args=(log_detail,),
                                     kwargs=kwargs, daemon=True, name=process_name)
             process.start()
@@ -320,28 +336,32 @@ class LogAnalyzer(ABC):
                 logging.info(f"suppress alert regex list updated. regex_list: {self.regex_list}")
             time.sleep(regex_list_refresh_time_wait)
 
-    def listen(self, log_detail: LogDetail) -> None:
-        logging.debug(f"called listen for file {log_detail.log_file_path} ...")
-        self.log_detail = log_detail
+    def listen(self) -> None:
+        logging.debug(f"called listen for file {self.log_detail.log_file_path} ...")
         thread: Thread = current_thread()
-        thread.name = log_detail.service
-        if log_detail.log_prefix_regex_pattern_to_callable_name_dict is None:
-            log_detail.log_prefix_regex_pattern_to_callable_name_dict = \
+        thread.name = self.log_detail.service
+        if self.log_detail.log_prefix_regex_pattern_to_callable_name_dict is None:
+            self.log_detail.log_prefix_regex_pattern_to_callable_name_dict = \
                 self.log_prefix_regex_pattern_to_callable_name_dict
 
-        setattr(thread, "service_detail", log_detail)
+        setattr(thread, "service_detail", self.log_detail)
 
-        processed_timestamp = log_detail.processed_timestamp
+        processed_timestamp = self.log_detail.processed_timestamp
 
-        process, poll = self._run_tail_process_n_poll_register(log_detail, processed_timestamp)
+        process, poll = self._run_tail_process_n_poll_register(self.log_detail, processed_timestamp)
 
         if process is not None:
-            log_detail.is_running = True
-            Thread(target=self.tail_poll_handler, args=(process, poll, log_detail,), daemon=True).start()
-            self._analyze_log(log_detail)
-        # else not required: Logging and Quiting if initiating process got some exception
+            self.log_detail.is_running = True
+            Thread(target=self.tail_poll_handler, args=(process, poll, self.log_detail,), daemon=True).start()
+            res = self._analyze_log(self.log_detail)
 
-        logging.info("Exited listen ... ")
+            if res == 1:
+                logging.warning(f"Internal restart triggered for {self.log_detail.log_file_path=}")
+                threading.Thread(target=self.handle_tail_restart, args=(self.log_detail, ), daemon=True).start()
+                time.sleep(2)   # wait for handle_tail_restart handling to complete in sep thread
+            else:
+                logging.warning(f"Gracefully stopping tail_executor for {self.log_detail.log_file_path=}")
+        # else not required: Logging and Quiting if initiating process got some exception
 
     def _run_tail_process_n_poll_register(self, log_detail: LogDetail, restart_timestamp: str | None = None):
         grep_regex_pattern = "|".join([re_pattern_to_grep(regex_pattern) for regex_pattern in
@@ -402,14 +422,15 @@ class LogAnalyzer(ABC):
                 # else not required: service is not critical or poll_timeout is not breached - skipping periodic
                 # check for new logs
 
-    def _analyze_log(self, log_detail: LogDetail) -> None:
+    def _analyze_log(self, log_detail: LogDetail) -> int:
+        source_file_name = PurePath(__file__).name
         while log_detail.is_running:
             try:
                 line = self.tail_update_queue.get(timeout=log_detail.poll_timeout)
 
                 # handling graceful shutdown
                 if line == "EXIT":
-                    return
+                    return 0
 
                 # tail file header
                 if line.startswith("==>"):
@@ -427,7 +448,7 @@ class LogAnalyzer(ABC):
                                               f"restarting...")
                         logging.critical(f"{brief_msg_str}{LogAnalyzer.log_seperator}{line}")
                         self.notify_tail_error_in_log_service(brief_msg_str, line)
-                        self.handle_tail_restart(log_detail)
+                        return 1
                     # expected tail error
                     logging.warning(line)
                     continue
@@ -471,7 +492,7 @@ class LogAnalyzer(ABC):
                                        f"{LogAnalyzer.log_seperator} to specify brief and detail in log, "
                                        f"adjusted log brief: {log_msg_brief}")
 
-                        self.notify_error(err_str)
+                        self.notify_error(err_str, source_file_name, inspect.currentframe().f_lineno, DateTime.utcnow())
 
                     regex_match: bool = False
                     for regex_pattern in self.regex_list:
@@ -485,7 +506,8 @@ class LogAnalyzer(ABC):
                             err_str_ = (f"Failed to compile regex pattern, pattern: {regex_pattern}, "
                                         f"exception: {e}")
                             logging.exception(err_str_)
-                            self.notify_error(err_str_)
+                            self.notify_error(err_str_, source_file_name, inspect.currentframe().f_lineno,
+                                              DateTime.utcnow())
                     # ignore processing the log line that matches the regex list
                     if regex_match:
                         break
@@ -498,7 +520,8 @@ class LogAnalyzer(ABC):
                                     f"exception: {e}, inheriting log_analyzer name: "
                                     f"{self.__class__.__name__}")
                         logging.exception(err_str_)
-                        self.notify_error(err_str_)
+                        self.notify_error(err_str_, source_file_name, inspect.currentframe().f_lineno,
+                                          DateTime.utcnow())
                     if match_callable:
                         match_callable(log_prefix, log_message, log_detail)
 
@@ -510,7 +533,7 @@ class LogAnalyzer(ABC):
             except Exception as e:
                 err_str_ = f"_analyze_log failed{LogAnalyzer.log_seperator} exception: {e}"
                 logging.exception(err_str_)
-                self.notify_error(err_str_)
+                self.notify_error(err_str_, source_file_name, inspect.currentframe().f_lineno, DateTime.utcnow())
 
     def _is_str_limit_breached(self, text: str) -> bool:
         if len(text.encode("utf-8")) > LogAnalyzer.max_str_size_in_bytes:
@@ -557,10 +580,13 @@ class LogAnalyzer(ABC):
         raise NotImplementedError("notify_tail_error_in_log_service not implemented in derived class")
 
     @abstractmethod
-    def notify_error(self, error_msg: str):
+    def notify_error(self, error_msg: str, source_name: str, line_num: int, log_create_date_time: DateTime):
         """
         Handling to be implemented to notify in derived class when some error occurred in base log_analyzer class
         :param error_msg: error msg to be notified by derived implementation
+        :param source_name: source file where error occurred
+        :param line_num: line num on which error occurred
+        :param log_create_date_time: date_time at which error occurred
         :return: None
         """
         raise NotImplementedError("notify_error not implemented in derived class")

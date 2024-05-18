@@ -1082,6 +1082,50 @@ def get_mongo_db_list(mongo_server_uri: str) -> List[str]:
     return client.list_database_names()
 
 
+def delete_mongo_document(mongo_server_uri: str, database_name: str,
+                          collection_name: str, delete_filter: Dict) -> bool:
+    client: MongoClient | None = None
+    try:
+        client = MongoClient(mongo_server_uri)
+        db = client.get_database(name=database_name)
+        collection = db.get_collection(name=collection_name)
+        res = collection.delete_many(delete_filter)
+        if res.deleted_count > 0:
+            return True
+        else:
+            return False
+    except Exception as e:
+        err_str = (f"delete_mongo_document failed for {mongo_server_uri=}, {database_name=}, "
+                   f"{collection_name=}, {delete_filter=};;;exception: {e}")
+        logging.exception(err_str)
+        raise e
+    finally:
+        if client is not None:
+            client.close()
+
+
+def create_mongo_document(mongo_server_uri: str, database_name: str,
+                          collection_name: str, insert_json: Dict) -> bool:
+    client: MongoClient | None = None
+    try:
+        client = MongoClient(mongo_server_uri)
+        db = client.get_database(name=database_name)
+        collection = db.get_collection(name=collection_name)
+        res = collection.insert_one(insert_json)
+        if res.inserted_id > 0:
+            return True
+        else:
+            return False
+    except Exception as e:
+        err_str = (f"create_mongo_document failed for {mongo_server_uri=}, {database_name=}, "
+                   f"{collection_name=}, {insert_json=};;;exception: {e}")
+        logging.exception(err_str)
+        raise e
+    finally:
+        if client is not None:
+            client.close()
+
+
 def get_immediate_prev_weekday(any_date: datetime = datetime.now()) -> datetime:
     """
     iso-weekday 1 == Monday ;; 7 == SUNDAY
