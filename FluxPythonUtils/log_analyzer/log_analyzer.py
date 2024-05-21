@@ -22,6 +22,7 @@ import inspect
 # 3rd part imports
 from pydantic import BaseModel, ConfigDict
 from pendulum import DateTime, parse
+import pendulum
 import setproctitle
 
 # project imports
@@ -55,7 +56,9 @@ class LogDetail(BaseModel):
     is_running: bool = True
     force_kill: bool = False
     critical: bool = False
-    log_prefix_regex_pattern_to_callable_name_dict: Dict[str, str] | None
+    log_prefix_regex_pattern_to_callable_name_dict: Dict[str, str]
+    log_prefix_regex_pattern_to_log_date_time_regex_pattern: Dict[str, str] | None = None
+    log_prefix_regex_pattern_to_log_source_patter_n_line_num_regex_pattern: Dict[str, str] | None = None
     log_file_path_is_regex: bool = False
     process: subprocess.Popen | None = None
     poll_timeout: float = 60.0   # seconds
@@ -130,10 +133,6 @@ class LogAnalyzer(ABC):
             os.killpg(process.pid, signal.SIGKILL)
 
             self.tail_update_queue.put("EXIT")
-
-            # deleting lock file for suppress alert regex
-            if os.path.exists(self.regex_lock_file):
-                os.remove(self.regex_lock_file)
 
         # else not required: avoiding multiple terminate calls
 
@@ -383,7 +382,7 @@ class LogAnalyzer(ABC):
             process: subprocess.Popen = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                                          preexec_fn=os.setpgrp, shell=True)
 
-            logging.debug(f"Started tail process for log_file: {log_detail.log_file_path}, {process.pid = }")
+            logging.debug(f"Started tail process for log_file: {log_detail.log_file_path}, {process.pid=}")
             os.set_blocking(process.stdout.fileno(), False)    # makes stdout.readlines() non-blocking
 
             # add poll for process stdout for non-blocking tail of log file
@@ -447,7 +446,8 @@ class LogAnalyzer(ABC):
                         brief_msg_str: str = (f"tail error encountered in log service: {log_detail.service}, "
                                               f"restarting...")
                         logging.critical(f"{brief_msg_str}{LogAnalyzer.log_seperator}{line}")
-                        self.notify_tail_error_in_log_service(brief_msg_str, line)
+                        self.notify_tail_error_in_log_service(brief_msg_str, line, PurePath(__file__).name,
+                                                              inspect.currentframe().f_lineno, DateTime.utcnow())
                         return 1
                     # expected tail error
                     logging.warning(line)
@@ -461,9 +461,21 @@ class LogAnalyzer(ABC):
 
                     log_prefix: str | None
                     log_message: str | None
-                    log_prefix, log_message = \
-                        self._get_log_prefix_n_message(log_line=line,
-                                                       log_prefix_pattern=log_prefix_regex_pattern)
+                    log_date_time_regex_pattern: str | None = None
+                    if log_detail.log_prefix_regex_pattern_to_log_date_time_regex_pattern is not None:
+                        log_date_time_regex_pattern = (
+                            log_detail.log_prefix_regex_pattern_to_log_date_time_regex_pattern.get(
+                                log_prefix_regex_pattern))
+                    log_source_patter_n_line_num_regex_pattern: str | None = None
+                    if log_detail.log_prefix_regex_pattern_to_log_source_patter_n_line_num_regex_pattern is not None:
+                        log_source_patter_n_line_num_regex_pattern = (
+                            log_detail.log_prefix_regex_pattern_to_log_source_patter_n_line_num_regex_pattern.get(
+                                log_prefix_regex_pattern))
+                    log_prefix, log_message, log_date_time, log_source_file_name, line_num = \
+                        self._get_log_prefix_n_message_n_log_data(
+                            log_line=line, log_prefix_pattern=log_prefix_regex_pattern,
+                            log_date_time_regex_pattern=log_date_time_regex_pattern,
+                            log_source_patter_n_line_num_regex_pattern=log_source_patter_n_line_num_regex_pattern)
 
                     # error already logged. continue processing next line
                     if not log_prefix or not log_message:
@@ -523,7 +535,8 @@ class LogAnalyzer(ABC):
                         self.notify_error(err_str_, source_file_name, inspect.currentframe().f_lineno,
                                           DateTime.utcnow())
                     if match_callable:
-                        match_callable(log_prefix, log_message, log_detail)
+                        match_callable(log_prefix, log_message, log_detail,
+                                       log_date_time, log_source_file_name, line_num)
 
                     # updating last_processed_utc_datetime for this log_detail
                     log_detail.last_processed_utc_datetime = DateTime.utcnow()
@@ -547,17 +560,47 @@ class LogAnalyzer(ABC):
             text += f"...check the file: {service_detail.log_file_path} to see the entire log"
         return text
 
-    def _get_log_prefix_n_message(self, log_line: str, log_prefix_pattern: str) -> Tuple[str, str] | Tuple[None, None]:
+    def _get_log_prefix_n_message_n_log_data(
+            self, log_line: str, log_prefix_pattern: str,
+            log_date_time_regex_pattern: str | None = None,
+            log_source_patter_n_line_num_regex_pattern: str | None = None) -> (Tuple[str, str, DateTime, str, int] |
+                                                                               Tuple[None, None, None, None, None]):
         pattern: re.Pattern = re.compile(log_prefix_pattern)
         match = pattern.search(log_line)
         if not match:
             logging.error(f"_get_log_prefix_n_message failed. Failed to find match for {log_prefix_pattern=} "
                           f"in {log_line=}")
-            return None, None
+            return None, None, None, None, None
 
         log_prefix: str = match.group(0)
         log_message: str = log_line.replace(log_prefix, "").strip()
-        return log_prefix, log_message
+
+        log_date_time = None
+        if log_date_time_regex_pattern:
+            match = re.search(log_date_time_regex_pattern, log_line)
+            if match:
+                timestamp = match.group(1)
+                # logs are stored in local datetime - converting to UTC
+                log_date_time = pendulum.parse(timestamp, tz=pendulum.local_timezone()).in_tz('UTC')
+            else:
+                logging.error(f"Can't find match for {log_date_time_regex_pattern=} in {log_line=}")
+
+        source_file_name: str | None = None
+        line_num: int | None = None
+        if log_source_patter_n_line_num_regex_pattern:
+            match = re.search(log_source_patter_n_line_num_regex_pattern, log_line)
+            if match:
+                source_file_name = match.group(1).strip()
+
+                source_file_name_sep = source_file_name.split(os.sep)
+                # if source file name is instead complete path then fetching only source file name from it
+                if len(source_file_name_sep) > 1:
+                    source_file_name = source_file_name_sep[-1]
+                line_num = parse_to_int(match.group(2), raise_exception=False)
+            else:
+                logging.error(f"Can't find match for {log_source_patter_n_line_num_regex_pattern=} in {log_line=}")
+
+        return log_prefix, log_message, log_date_time, source_file_name, line_num
 
     @abstractmethod
     def notify_no_activity(self, log_detail: LogDetail):
@@ -570,11 +613,16 @@ class LogAnalyzer(ABC):
         raise NotImplementedError("handle_no_activity not implemented in derived class")
 
     @abstractmethod
-    def notify_tail_error_in_log_service(self, brief_msg_str: str, detail_msg_str: str):
+    def notify_tail_error_in_log_service(self, brief_msg_str: str, detail_msg_str: str,
+                                         source_file_name: str, line_num: int,
+                                         alert_create_date_time: DateTime):
         """
         Handling to be implemented to notify in derived class when tail encounters as error in base class
         :param brief_msg_str: brief msg sent by base regarding error
         :param detail_msg_str: detailed msg sent by base regarding error
+        :param source_file_name: file name contained error
+        :param line_num: line number at which error occurred
+        :param alert_create_date_time: date_time of error
         :return: None
         """
         raise NotImplementedError("notify_tail_error_in_log_service not implemented in derived class")

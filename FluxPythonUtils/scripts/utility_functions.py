@@ -1234,14 +1234,15 @@ def perf_benchmark_sync_callable(func_callable):
     return benchmarker
 
 
-def parse_to_int(int_str: str | int | float) -> int:
+def parse_to_int(int_str: str | int | float, raise_exception: bool = True) -> int:
     try:
         parsed_int = int(int_str)
         return parsed_int
     except ValueError as e:
         err_str = f"{type(int_str)} is not parsable to integer, exception: {e}"
         logging.exception(err_str)
-        raise Exception(err_str)
+        if raise_exception:
+            raise Exception(err_str)
 
 
 def parse_to_float(float_str: str) -> float:
