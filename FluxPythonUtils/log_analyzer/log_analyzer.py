@@ -363,8 +363,8 @@ class LogAnalyzer(ABC):
         # else not required: Logging and Quiting if initiating process got some exception
 
     def _run_tail_process_n_poll_register(self, log_detail: LogDetail, restart_timestamp: str | None = None):
-        grep_regex_pattern = "|".join([re_pattern_to_grep(regex_pattern) for regex_pattern in
-                                       log_detail.log_prefix_regex_pattern_to_callable_name_dict.keys()])
+        grep_regex_pattern = r"\|".join([re_pattern_to_grep(regex_pattern) for regex_pattern in
+                                        log_detail.log_prefix_regex_pattern_to_callable_name_dict.keys()])
         grep_regex_pattern += r"\|tail:"
         restart_line_no: str = "0"
         if restart_timestamp is not None:
@@ -456,8 +456,8 @@ class LogAnalyzer(ABC):
                 for log_prefix_regex_pattern, callable_name in (
                         log_detail.log_prefix_regex_pattern_to_callable_name_dict.items()):
                     # ignore processing log line that not matches log_prefix_regex_pattern
-                    # if not re.compile(log_prefix_regex_pattern).search(line):
-                    #     continue
+                    if not re.compile(log_prefix_regex_pattern).search(line):
+                        continue
 
                     log_prefix: str | None
                     log_message: str | None
@@ -577,28 +577,38 @@ class LogAnalyzer(ABC):
 
         log_date_time = None
         if log_date_time_regex_pattern:
-            match = re.search(log_date_time_regex_pattern, log_line)
-            if match:
-                timestamp = match.group(1)
-                # logs are stored in local datetime - converting to UTC
-                log_date_time = pendulum.parse(timestamp, tz=pendulum.local_timezone()).in_tz('UTC')
-            else:
-                logging.error(f"Can't find match for {log_date_time_regex_pattern=} in {log_line=}")
+            try:
+                match = re.search(log_date_time_regex_pattern, log_line)
+                if match:
+                    timestamp = match.group(1)
+                    # logs are stored in local datetime - converting to UTC
+                    log_date_time = pendulum.parse(timestamp, tz=pendulum.local_timezone()).in_tz('UTC')
+                else:
+                    logging.error(f"Can't find match for {log_date_time_regex_pattern=} in {log_line=}")
+            except Exception as e:
+                err_str_ = (f"Something went wrong while searching log date_time using regex pattern, "
+                            f"{log_date_time_regex_pattern=};;; {log_line=}, exception: {e}")
+                logging.exception(err_str_)
 
         source_file_name: str | None = None
         line_num: int | None = None
         if log_source_patter_n_line_num_regex_pattern:
-            match = re.search(log_source_patter_n_line_num_regex_pattern, log_line)
-            if match:
-                source_file_name = match.group(1).strip()
+            try:
+                match = re.search(log_source_patter_n_line_num_regex_pattern, log_line)
+                if match:
+                    source_file_name = match.group(1).strip()
 
-                source_file_name_sep = source_file_name.split(os.sep)
-                # if source file name is instead complete path then fetching only source file name from it
-                if len(source_file_name_sep) > 1:
-                    source_file_name = source_file_name_sep[-1]
-                line_num = parse_to_int(match.group(2), raise_exception=False)
-            else:
-                logging.error(f"Can't find match for {log_source_patter_n_line_num_regex_pattern=} in {log_line=}")
+                    source_file_name_sep = source_file_name.split(os.sep)
+                    # if source file name is instead complete path then fetching only source file name from it
+                    if len(source_file_name_sep) > 1:
+                        source_file_name = source_file_name_sep[-1]
+                    line_num = parse_to_int(match.group(2), raise_exception=False)
+                else:
+                    logging.error(f"Can't find match for {log_source_patter_n_line_num_regex_pattern=} in {log_line=}")
+            except Exception as e:
+                err_str_ = (f"Something went wrong while searching source_file_name and log line using regex pattern, "
+                            f"{log_source_patter_n_line_num_regex_pattern=};;; {log_line=}, exception: {e}")
+                logging.exception(err_str_)
 
         return log_prefix, log_message, log_date_time, source_file_name, line_num
 

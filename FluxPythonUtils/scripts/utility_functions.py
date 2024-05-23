@@ -640,6 +640,12 @@ def filter_keywords(filter_str: str, keywords_list: List[str]) -> bool:
     return False
 
 
+def load_yaml(file_path: str) -> Dict:
+    with open(file_path) as f:
+        data = yaml.load(f, Loader=YAMLImporter)
+        return data
+
+
 class YAMLConfigurationManager:
     """
     Class handling to make the fetching of yaml configurations efficient
@@ -1646,3 +1652,17 @@ def submitted_task_result(future):
         err_str_ = f"_task_result failed with exception: {e}"
         logging.error(err_str_)
         raise Exception(err_str_)
+
+
+def handle_refresh_configurable_data_members(
+        callback_override_obj, config_key_to_data_member_name_dict: Dict[str, str],
+        config_dict_path: str):
+    config_dict_yaml_ = load_yaml(config_dict_path)
+    for config_key, data_member_name in config_key_to_data_member_name_dict.items():
+        updated_value = config_dict_yaml_.get(config_key)
+        if updated_value is not None:
+            setattr(callback_override_obj, data_member_name, updated_value)
+            logging.debug(f"Updated {data_member_name=} with new value {updated_value=}")
+        else:
+            logging.error(f"Can't find key {config_key=!r} in updated snapshot of config yaml - "
+                          f"ignoring this update")
