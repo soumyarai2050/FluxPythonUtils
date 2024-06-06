@@ -1240,7 +1240,7 @@ def perf_benchmark_sync_callable(func_callable):
     return benchmarker
 
 
-def parse_to_int(int_str: str | int | float, raise_exception: bool = True) -> int:
+def parse_to_int(int_str: str | int | float, raise_exception: bool = True) -> int | None:
     try:
         parsed_int = int(int_str)
         return parsed_int
@@ -1249,6 +1249,7 @@ def parse_to_int(int_str: str | int | float, raise_exception: bool = True) -> in
         logging.exception(err_str)
         if raise_exception:
             raise Exception(err_str)
+        return None
 
 
 def parse_to_float(float_str: str) -> float:
@@ -1578,6 +1579,24 @@ def re_pattern_to_grep(pattern: str) -> str:
     pattern = pattern.replace("\\W", "[^a-zA-Z0-9_]")
 
     return pattern
+
+
+def convert_pattern_for_awk_match(pattern_str: str) -> str:
+    regex_pattern = r'\\d\{(\d+)\}'
+    matches = re.findall(regex_pattern, pattern_str)
+    for match in matches:
+        rep_num = parse_to_int(match, raise_exception=False)
+        if rep_num is not None:
+            matched_pattern = f'\\d{{{match}}}'
+            pattern_str = pattern_str.replace(matched_pattern, "[0-9]"*rep_num)
+        else:
+            err_str = f"match found from pattern is not int, found {match} from {pattern_str=}"
+            raise Exception(err_str)
+
+    # handling remaining num patterns
+    pattern_str = pattern_str.replace(r"\d", "[0-9]")
+
+    return pattern_str
 
 
 def get_log_line_no_from_timestamp(log_file_path: str, timestamp: str) -> str | None:

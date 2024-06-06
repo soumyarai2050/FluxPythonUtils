@@ -446,10 +446,14 @@ class LogAnalyzer(ABC):
                         brief_msg_str: str = (f"tail error encountered in log service: {log_detail.service}, "
                                               f"restarting...")
                         logging.critical(f"{brief_msg_str}{LogAnalyzer.log_seperator}{line}")
-                        self.notify_tail_error_in_log_service(brief_msg_str, line, PurePath(__file__).name,
+                        self.notify_tail_event_in_log_service("warning", brief_msg_str, line, PurePath(__file__).name,
                                                               inspect.currentframe().f_lineno, DateTime.utcnow())
                         return 1
-                    # expected tail error
+                    elif "has appeared;  following new file" in line:   # tail reconnected notify
+                        brief_msg_str: str = (f"tail reconnected to {log_detail.log_file_path=}")
+                        logging.critical(f"{brief_msg_str}{LogAnalyzer.log_seperator}{line}")
+                        self.notify_tail_event_in_log_service("warning", brief_msg_str, line, PurePath(__file__).name,
+                                                              inspect.currentframe().f_lineno, DateTime.utcnow())
                     logging.warning(line)
                     continue
 
@@ -623,11 +627,12 @@ class LogAnalyzer(ABC):
         raise NotImplementedError("handle_no_activity not implemented in derived class")
 
     @abstractmethod
-    def notify_tail_error_in_log_service(self, brief_msg_str: str, detail_msg_str: str,
+    def notify_tail_event_in_log_service(self, severity: str, brief_msg_str: str, detail_msg_str: str,
                                          source_file_name: str, line_num: int,
                                          alert_create_date_time: DateTime):
         """
         Handling to be implemented to notify in derived class when tail encounters as error in base class
+        :param severity: severity string
         :param brief_msg_str: brief msg sent by base regarding error
         :param detail_msg_str: detailed msg sent by base regarding error
         :param source_file_name: file name contained error
