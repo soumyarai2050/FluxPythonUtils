@@ -83,6 +83,9 @@ def log_n_except(original_function):
         try:
             result = original_function(*args, **kwargs)
             return result
+        except HTTPException as http_e:
+            logging.exception(http_e.detail)
+            raise Exception(http_e.detail)
         except Exception as e:
             err_str = f"Client Error Occurred in function: {original_function.__name__};;;args: {args}, " \
                       f"kwargs: {kwargs}, exception: {e}"
