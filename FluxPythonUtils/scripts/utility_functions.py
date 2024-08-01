@@ -1187,60 +1187,64 @@ def get_timeit_field_separator() -> str:
     return "~"
 
 
-def get_time_it_log_pattern(callable_name: str, start_time: DateTime, delta: float):
+def get_time_it_log_pattern(callable_name: str, start_time: DateTime, delta: float, project_name: str):
     time_it_pattern: str = get_timeit_pattern()
     field_separator: str = get_timeit_field_separator()
     pattern_str = (f"{time_it_pattern}{callable_name}{field_separator}{start_time}"
-                   f"{field_separator}{delta}{time_it_pattern}")
+                   f"{field_separator}{delta}{field_separator}{project_name}{time_it_pattern}")
     return pattern_str
 
 
 # Decorator Function
-def perf_benchmark(func_callable):
-    @functools.wraps(func_callable)
-    async def benchmarker(*args, **kwargs):
-        lvl_names_mapping = logging.getLevelNamesMapping()
+def perf_benchmark(project_name: str | None = None):
+    def perf_benchmark_(func_callable):
+        @functools.wraps(func_callable)
+        async def benchmarker(*args, **kwargs):
+            lvl_names_mapping = logging.getLevelNamesMapping()
 
-        if "TIMING" in lvl_names_mapping:
-            logger = logging.getLogger()
-            if logger.getEffectiveLevel() <= logging.TIMING:
-                call_date_time = DateTime.utcnow()
-                start_time = timeit.default_timer()
-                return_val = await func_callable(*args, **kwargs)
-                end_time = timeit.default_timer()
-                delta = parse_to_float(f"{(end_time - start_time):.6f}")
-
-                pattern_str = get_time_it_log_pattern(func_callable.__name__, call_date_time, delta)
-                logging.timing(pattern_str)
+            if "TIMING" in lvl_names_mapping:
+                logger = logging.getLogger()
+                if logger.getEffectiveLevel() <= logging.TIMING:
+                    call_date_time = DateTime.utcnow()
+                    start_time = timeit.default_timer()
+                    return_val = await func_callable(*args, **kwargs)
+                    end_time = timeit.default_timer()
+                    delta = parse_to_float(f"{(end_time - start_time):.6f}")
+                    pattern_str = get_time_it_log_pattern(func_callable.__name__, call_date_time, delta, project_name)
+                    logging.timing(pattern_str)
+                else:
+                    return_val = await func_callable(*args, **kwargs)
             else:
                 return_val = await func_callable(*args, **kwargs)
-        else:
-            return_val = await func_callable(*args, **kwargs)
-        return return_val
-    return benchmarker
+            return return_val
+
+        return benchmarker
+    return perf_benchmark_
 
 
-def perf_benchmark_sync_callable(func_callable):
-    def benchmarker(*args, **kwargs):
-        lvl_names_mapping = logging.getLevelNamesMapping()
+def perf_benchmark_sync_callable(project_name: str | None = None):
+    def perf_benchmark_sync_callable_(func_callable):
+        def benchmarker(*args, **kwargs):
+            lvl_names_mapping = logging.getLevelNamesMapping()
 
-        if "TIMING" in lvl_names_mapping:
-            logger = logging.getLogger()
-            if logger.getEffectiveLevel() <= logging.TIMING:
-                call_date_time = DateTime.utcnow()
-                start_time = timeit.default_timer()
-                return_val = func_callable(*args, **kwargs)
-                end_time = timeit.default_timer()
-                delta = parse_to_float(f"{(end_time - start_time):.6f}")
+            if "TIMING" in lvl_names_mapping:
+                logger = logging.getLogger()
+                if logger.getEffectiveLevel() <= logging.TIMING:
+                    call_date_time = DateTime.utcnow()
+                    start_time = timeit.default_timer()
+                    return_val = func_callable(*args, **kwargs)
+                    end_time = timeit.default_timer()
+                    delta = parse_to_float(f"{(end_time - start_time):.6f}")
 
-                pattern_str = get_time_it_log_pattern(func_callable.__name__, call_date_time, delta)
-                logging.timing(pattern_str)
+                    pattern_str = get_time_it_log_pattern(func_callable.__name__, call_date_time, delta, project_name)
+                    logging.timing(pattern_str)
+                else:
+                    return_val = func_callable(*args, **kwargs)
             else:
                 return_val = func_callable(*args, **kwargs)
-        else:
-            return_val = func_callable(*args, **kwargs)
-        return return_val
-    return benchmarker
+            return return_val
+        return benchmarker
+    return perf_benchmark_sync_callable_
 
 
 def parse_to_int(int_str: str | int | float, raise_exception: bool = True) -> int | None:
