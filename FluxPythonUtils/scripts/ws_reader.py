@@ -1,7 +1,7 @@
 import os
 import sys
 import time
-from typing import Type, Callable, ClassVar, List, Dict
+from typing import Type, Callable, ClassVar, List, Dict, Final
 import websockets
 from websockets.exceptions import ConnectionClosedOK, ConnectionClosedError, ConnectionClosed
 import asyncio
@@ -10,13 +10,17 @@ import logging
 from threading import RLock
 import urllib.parse
 
-os.environ["DBType"] = "beanie"
-
 from FluxPythonUtils.scripts.ws_reader_lite import WSReaderLite
 
 
 class WSReader(WSReaderLite):
     shutdown: ClassVar[bool] = True
+    size_1_mb: Final[int] = 2 ** 20
+    size_16_mb: Final[int] = size_1_mb * 16
+    size_8_mb: Final[int] = size_1_mb * 8
+    size_10_mb: Final[int] = size_1_mb * 10
+    no_warn_size_mb: Final[int] = size_8_mb
+    max_ws_buff_size: ClassVar[int] = size_10_mb
 
     @classmethod
     def start(cls):
@@ -45,14 +49,18 @@ class WSReader(WSReaderLite):
     ws_cont_list: ClassVar[List['WSReader']] = []
     new_ws_cont_list: ClassVar[List['WSReader']] = []
 
-    # callable accepts List of PydanticClassType or None; None implies WS connection closed
-    def __init__(self, uri: str, PydanticClassType: Type, PydanticClassTypeList: Type, callback: Callable,
+    # callable accepts List of ModelClassType or None; None implies WS connection closed
+    def __init__(self, uri: str, ModelClassType: Type, ModelClassTypeList: Type, callback: Callable,
                  query_kwargs: Dict | None = None, notify: bool = True):
         super().__init__(uri, callback, query_kwargs)
-        self.PydanticClassType: Type = PydanticClassType
-        self.PydanticClassTypeList = PydanticClassTypeList
+        self.ModelClassType: Type = ModelClassType
+        self.ModelClassTypeList = ModelClassTypeList
         self.notify = notify
         self.expired: bool = False
+
+    def __str__(self):
+        return (f"{super().__str__()}-ModelClassType: {self.ModelClassType}-ModelClassTypeList: "
+                f"{self.ModelClassTypeList}-expired: {self.expired}")
 
     def register_to_run(self):
         WSReader.ws_cont_list.append(self)
@@ -61,23 +69,23 @@ class WSReader(WSReaderLite):
         WSReader.new_ws_cont_list.append(self)
 
     @staticmethod
-    def read_pydantic_obj_list(json_data, PydanticClassListType):
+    def read_model_obj_list(json_data: str, ModelClassListType):
         try:
             # how do we safely & efficiently test if JSON data is of type list, to avoid except & return None instead?
-            pydantic_obj_list = PydanticClassListType(root=json_data)
-            return pydantic_obj_list
+            model_obj_list = ModelClassListType.from_json_str(json_data)
+            return model_obj_list
         except Exception as e:
-            logging.exception(f"list type: {PydanticClassListType} json decode failed;;;json_data: {json_data}, "
+            logging.exception(f"list type: {ModelClassListType} json decode failed;;;json_data: {json_data}, "
                               f"exception: {e}")
             return None
 
     @staticmethod
-    def read_pydantic_obj(json_data, PydanticClassType):
+    def read_model_obj(json_data: str, ModelClassType):
         try:
-            pydantic_obj = PydanticClassType(**json_data)
-            return pydantic_obj
+            model_obj = ModelClassType.from_json_str(json_data)
+            return model_obj
         except Exception as e:
-            logging.exception(f"{PydanticClassType.__name__} json decode failed;;;"
+            logging.exception(f"{ModelClassType.__name__} json decode failed;;;"
                               f"exception: {e}, json_data: {json_data}")
             return None
 
@@ -90,32 +98,32 @@ class WSReader(WSReaderLite):
             logging.exception(f"dropping update, json loads failed, no json_data from json_str"
                               f"first update for {ws_cont.PydanticClassTypeList}"
                               f";;;Json str: {json_str}, exception: {e}")
-        if isinstance(json_data, dict):
-            pydantic_obj = WSReader.read_pydantic_obj(json_data, ws_cont.PydanticClassType)
-            if pydantic_obj:
-                WSReader.dispatch_pydantic_obj(pydantic_obj, ws_cont.callback)
-        elif isinstance(json_data, list):
-            pydantic_obj_list = WSReader.read_pydantic_obj_list(json_data, ws_cont.PydanticClassTypeList)
-            if pydantic_obj_list is not None:
-                for pydantic_obj in pydantic_obj_list.root:
-                    WSReader.dispatch_pydantic_obj(pydantic_obj, ws_cont.callback)
+        if json_str.startswith("{") and json_str.endswith("}"):
+            model_obj = WSReader.read_model_obj(json_str, ws_cont.ModelClassType)
+            if model_obj:
+                WSReader.dispatch_model_obj(model_obj, ws_cont.callback)
+        elif json_str.startswith("[") and json_str.endswith("]"):
+            model_obj_list = WSReader.read_model_obj_list(json_str, ws_cont.ModelClassTypeList)
+            if model_obj_list is not None:
+                for model_obj in model_obj_list.root:
+                    WSReader.dispatch_model_obj(model_obj, ws_cont.callback)
         else:
             logging.error(f"Dropping update: loaded json from json_str is not instance of list or dict, "
-                          f"json type: {type(json_data)} for {ws_cont.PydanticClassType};;; json_str: {json_str}")
+                          f"json type: = for {ws_cont.ModelClassType};;; json_str: {json_str}")
 
     # handle connection and communication with the server
     # TODO BUF FIX: current implementation would lose connection permanently if server is restarted forcing meed for
     #  client restart. The fix is to move websockets.connect in a periodic task and here we just mark the ws_cont
     #  disconnected
-    @staticmethod
-    async def ws_client():
+    @classmethod
+    async def ws_client(cls):
         # Connect to the server (don't send timeout=None to prod, used for debug only)
         pending_tasks = []
         for idx, ws_cont in enumerate(WSReader.ws_cont_list):
-            # default max buffer size is: 10MB, pass max_size=value to connect and increase / decrease the default
-            # size, for eg: max_size=2**24 to change the limit to 16 MB
             try:
-                ws_cont.ws = await websockets.connect(ws_cont.uri, ping_timeout=None, max_size=2 ** 24)
+                # default max buffer size is: 10MB, pass max_size=value to connect and increase / decrease the default
+                # size, for eg: max_size=2**24 to change the limit to 16 MB
+                ws_cont.ws = await websockets.connect(ws_cont.uri, ping_timeout=None, max_size=cls.max_ws_buff_size)
                 task = asyncio.create_task(ws_cont.ws.recv(), name=str(idx))
             except Exception as e:
                 logging.exception(f"ws_client error while connecting/async task submission ws_cont: {ws_cont}, "
@@ -148,10 +156,10 @@ class WSReader(WSReaderLite):
                         break
 
                 data_found_task = None
-                json_str: str | None = None
+                json_data: bytes | None = None
                 try:
                     data_found_task = completed_tasks.pop()
-                    json_str = data_found_task.result()
+                    json_data = data_found_task.result()
                 except ConnectionClosedOK as e:
                     idx = int(data_found_task.get_name())
                     logging.debug('\n', f"web socket connection closed gracefully within while loop for idx {idx};;;"
@@ -174,21 +182,28 @@ class WSReader(WSReaderLite):
                     # should we remove this ws - maybe this is an intermittent error, improve handling case by case
                     ws_remove_set.add(idx)
 
+                if isinstance(json_data, bytes):
+                    json_str = json_data.decode("utf-8")
+                else:
+                    json_str = json_data
                 idx = int(data_found_task.get_name())
 
                 if ws_remove_set and idx in ws_remove_set:
-                    logging.error(f"dropping {WSReader.ws_cont_list[idx]} - found in ws_remove_set")
-                    # TODO important add bug fix for server side restart driven reconnect logic by using
-                    #  force_disconnected
+                    logging.error(f"dropped idx: {idx} of uri: {WSReader.ws_cont_list[idx].uri};;;"
+                                  f"ws_reader: {WSReader.ws_cont_list[idx]}, found in ws_remove_set")
                     WSReader.ws_cont_list[idx].force_disconnected = True
                     continue
 
                 if json_str is not None:
                     recreated_task = asyncio.create_task(WSReader.ws_cont_list[idx].ws.recv(), name=str(idx))
                     pending_tasks.add(recreated_task)
-                    if len(json_str) > (2 ** 20):
+                    json_len: int = len(json_str)
+                    if json_len > cls.no_warn_size_mb:
+                        ws_json_len_mb = json_len / cls.size_1_mb
+                        max_ws_buff_len_mb = cls.max_ws_buff_size / cls.size_1_mb
                         logging.warning(
-                            f"> 1 MB json_str detected, size: {len(json_str)} in ws recv;;;json_str: {json_str}")
+                            f"{ws_json_len_mb=:.1f} detected in ws recv, current {max_ws_buff_len_mb=:.1f};;;"
+                            f"First 1024 bytes: {json_str[:1024]=}")
                     WSReader.handle_json_str(json_str, WSReader.ws_cont_list[idx])
                 else:
                     logging.error(f"dropping {WSReader.ws_cont_list[idx]} - json_str found None")
@@ -204,14 +219,14 @@ class WSReader(WSReaderLite):
                 # default max buffer size is: 10MB, pass max_size=value to connect and increase / decrease the default
                 # size, for eg: max_size=2**24 to change the limit to 16 MB
                 try:
-                    ws_cont.ws = await websockets.connect(ws_cont.uri, ping_timeout=None, max_size=2 ** 24)
+                    ws_cont.ws = await websockets.connect(ws_cont.uri, ping_timeout=None, max_size=cls.max_ws_buff_size)
                     task = asyncio.create_task(ws_cont.ws.recv(), name=str(idx))
                 except Exception as e:
-                    logging.exception(f"ws_client error while connecting/async task submission ws_cont: {ws_cont}, "
-                                      f"exception: {e}")
+                    logging.exception(f"ws_client exception while connecting/async task submission for {ws_cont.uri=};"
+                                      f" {ws_cont.PydanticClassType=}; exception: {e};;;{ws_cont=}")
                     ws_cont.force_disconnected = True
                 else:
                     pending_tasks.add(task)
-                    logging.debug(f"Added new ws in pending list for uri: {ws_cont.uri}")
+                    logging.debug(f"Added new ws in pending list for {ws_cont.uri=}")
                 WSReader.new_ws_cont_list.remove(ws_cont)
         logging.warning(f"WSReader instance going down")

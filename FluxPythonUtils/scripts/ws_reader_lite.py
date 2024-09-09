@@ -10,8 +10,6 @@ import logging
 from threading import RLock
 import urllib.parse
 
-os.environ["DBType"] = "beanie"
-
 
 class WSReaderLite:
     shutdown: ClassVar[bool] = True
@@ -30,20 +28,24 @@ class WSReaderLite:
         self.force_disconnected = False
         self.current_ws_shutdown: bool = True
 
+    def __str__(self):
+        return (f"is_first: {self.is_first}-force_disconnected: {self.force_disconnected}-current_ws_shutdown: "
+                f"{self.current_ws_shutdown}")
+
     def register_to_run(self):
         WSReaderLite.ws_cont_list.append(self)
 
     @staticmethod
-    def dispatch_pydantic_obj(pydantic_obj, callback):
+    def dispatch_model_obj(model_obj, callback):
         try:
-            callback(pydantic_obj)
+            callback(model_obj)
         except Exception as e:
             logging.exception(f"dropping this update - ws invoked callback threw exception;;;"
-                              f"PydanticObj: {pydantic_obj}, Exception {e}")
+                              f"PydanticObj: {model_obj}, Exception {e}")
 
     @staticmethod
     def handle_json_str(json_str: str, ws_cont):
-        WSReaderLite.dispatch_pydantic_obj(json_str, ws_cont.callback)
+        WSReaderLite.dispatch_model_obj(json_str, ws_cont.callback)
 
     async def current_ws_client(self):
         pending_tasks = []

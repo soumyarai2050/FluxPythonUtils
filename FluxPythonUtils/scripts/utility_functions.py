@@ -1,33 +1,32 @@
 # Standard imports
 import asyncio
 import copy
-import inspect
 import math
 import os
 import logging
 import pickle
 import re
 import threading
-import time
-from typing import List, Dict, TypeVar, Callable, Tuple, Type, Set, Any, Iterable, Final
-import sys
+from typing import List, Dict, Tuple, Type, Set, Any, Iterable, Final
 import socket
 from contextlib import closing
+
+import msgspec
 import pandas
 import pexpect
 import yaml
 from enum import IntEnum
-import json
 from pathlib import PurePath, Path
 import csv
 from websockets.exceptions import ConnectionClosedOK, ConnectionClosedError, ConnectionClosed
 from requests import Response
 from datetime import datetime, timedelta
-import timeit
-import functools
 import psutil
 import shutil
 import subprocess
+from dataclasses import dataclass
+import json
+import getpass
 
 # 3rd party packages
 from pydantic import BaseModel
@@ -38,15 +37,16 @@ from beanie.odm.documents import DocType
 from pendulum import DateTime
 from fastapi import WebSocket
 from fastapi import HTTPException
+import orjson
+import pendulum
 
 # FluxPythonUtils Modules
 from FluxPythonUtils.scripts.yaml_importer import YAMLImporter
+from FluxPythonUtils.scripts.model_base_utils import MsgspecBaseModel
 
 # Adds extra utility methods of pymongoarrow.monkey to pymongo collection objects
 # https://mongo-arrow.readthedocs.io/en/pymongoarrow-0.1.1/quickstart.html#extending-pymongo
 # pymongoarrow.monkey.patch_all()   # not being used currently + causing issues in cpp so file usage in ctypes.CDLL
-
-BaseModelOrItsDerivedType = TypeVar('BaseModelOrItsDerivedType', BaseModel, Callable)
 
 
 # Script containing all the utility: handy functions / classes / enums / decorators
@@ -64,7 +64,7 @@ class EmptyFileError(Exception):
         super().__init__(f"{self.message}, file_path: {self.file_path}")
 
 
-class ServieUnavailable(Exception):
+class ServiceUnavailable(Exception):
     """Exception raised to represent service unavailability.
 
     Attributes:
@@ -72,7 +72,7 @@ class ServieUnavailable(Exception):
         message -- brief explanation of the error (file path passed is auto-appended f-str below)
     """
 
-    def __init__(self, file_path: str, message: str = "Empty file found!"):
+    def __init__(self, file_path: str, message: str = "service unavailable!"):
         self.file_path = file_path
         self.message = message
         super().__init__(f"{self.message}, file_path: {self.file_path}")
@@ -83,16 +83,43 @@ def log_n_except(original_function):
         try:
             result = original_function(*args, **kwargs)
             return result
-        except HTTPException as http_e:
-            logging.exception(http_e.detail)
-            raise Exception(http_e.detail)
-        except Exception as e:
-            err_str = f"Client Error Occurred in function: {original_function.__name__};;;args: {args}, " \
-                      f"kwargs: {kwargs}, exception: {e}"
-            logging.exception(err_str)
-            raise Exception(err_str)
+        except Exception as exception:
+            orig_func_name: str
+            if original_function:
+                orig_func_name = original_function.__name__ if hasattr(original_function, "__name__") else \
+                    f"original_function_dunder_name_attr_not_found: {original_function=}"
+            else:
+                orig_func_name = f"{original_function=}"
+            err_str = f"Client Error Occurred in: {orig_func_name=};;; {exception=}, {args=}, {kwargs=}"
+            # 1mb = 1048576 bytes
+            # logging.exception(f"{err_str:.1048576}")
+            # raise Exception(f"{err_str:.1048576}")
+            logging.exception(f"{err_str:.1000}")
+            raise Exception(f"{err_str:.1000}")
 
     return wrapper_function
+
+
+def nan_inf_as_none(val: float | int | None):
+    """
+    useful for data coming from data frame sources where we may get Nan or INF numeric values
+    """
+    if val and math.isnan(val) or (not math.isfinite(val)):
+        val = None
+    return val
+
+
+def nan_inf_0_as_none(val: float | int | None):
+    """
+    useful for data coming from data frame sources where we may get Nan or INF numeric values
+    """
+    if val and math.isnan(val) or (not math.isfinite(val)) or math.isclose(val, 0):
+        val = None
+    return val
+
+
+def float_str(var: float | int | None, precision: int = 3):
+    return f"{(float(var) if var else 0.0):.{precision}f}"
 
 
 class HTTPRequestType(IntEnum):
@@ -104,7 +131,7 @@ class HTTPRequestType(IntEnum):
     PATCH = 5
 
 
-def http_response_as_class_type(url, response, expected_status_code, pydantic_type: BaseModelOrItsDerivedType,
+def http_response_as_class_type(url, response, expected_status_code, msgspec_type: Type[MsgspecBaseModel],
                                 http_request_type: HTTPRequestType):
     status_code, response_json = handle_http_response(response)
     if status_code == expected_status_code:
@@ -112,9 +139,9 @@ def http_response_as_class_type(url, response, expected_status_code, pydantic_ty
             return response_json
         else:
             if isinstance(response_json, list):
-                return [pydantic_type(**response_obj) for response_obj in response_json]
+                return [msgspec_type.from_dict(response_obj) for response_obj in response_json]
             else:
-                return pydantic_type(**response_json)
+                return msgspec_type.from_dict(response_json)
     else:
         raise Exception(f"failed for url: {url}, http_request_type: {str(http_request_type)} "
                         f"http_error: {response_json}, status_code: {status_code}")
@@ -124,7 +151,11 @@ def handle_http_response(response: Response):
     if response is None:
         return '{"error: passed response is None - no http response to handle!"}'
     if response.ok:
-        return response.status_code, json.loads(response.content)
+        content = response.content
+        if content == b'True' or content == b'False':
+            return response.status_code, True
+        else:
+            return response.status_code, orjson.loads(response.content)
     response_err_str: str | None = ""
     if response.content is not None:
         response_err_str += f"content: {response.content} "
@@ -141,10 +172,10 @@ def handle_http_response_extended(response: Response):
     if response is None:
         return '{"error: passed response is None - no http response to handle!"}'
     if response.ok:
-        return response.status_code, json.loads(response.content)
+        return response.status_code, orjson.loads(response.content)
     if response.content is not None:
         try:
-            content = json.loads(response.content)
+            content = orjson.loads(response.content)
             if 'errors' in content:
                 return response.status_code, content['errors']
             if 'error' in content:
@@ -155,7 +186,7 @@ def handle_http_response_extended(response: Response):
                 return response.status_code, content['messages']
             if 'detail' in content:
                 return response.status_code, content['detail']
-        except json.JSONDecodeError:
+        except orjson.JSONDecodeError:
             # handle as error
             if response.reason is not None:
                 content = response.reason
@@ -177,20 +208,25 @@ def csv_to_xlsx(file_name: str, csv_data_dir: PurePath | None = None, xlsx_data_
     csv_path = PurePath(csv_data_dir / f"{file_name}.csv")
     xlsx_path = PurePath(xlsx_data_dir / f"{file_name}.xlsx")
     csv_as_df = pd.read_csv(str(csv_path))
-    xlsx_writer = pd.ExcelWriter(str(xlsx_path))
-    csv_as_df.to_excel(xlsx_writer, index=False, header=True, sheet_name="target")
-    xlsx_writer.close()
+    with pd.ExcelWriter(str(xlsx_path)) as xlsx_writer:
+        csv_as_df.to_excel(xlsx_writer, index=False, header=True, sheet_name="target")
 
 
 def dict_or_list_records_csv_writer_ext(file_name: str, records: Dict | List, record_type,
                                         data_dir: PurePath | None = None):
-    fieldnames = record_type.schema()["properties"].keys()
+    fieldnames = record_type.__annotations__.keys()
     dict_or_list_records_csv_writer(file_name, records, fieldnames, record_type, data_dir)
 
 
 def dict_or_list_records_csv_writer(file_name: str, records: Dict | List, fieldnames, record_type,
-                                    data_dir: PurePath | None = None):
+                                    data_dir: PurePath | None = None, append_mode: bool = False,
+                                    include_header: bool = True, by_alias: bool = False):
     """
+    :param append_mode: (bool) append records in csv file if exists, else create a new csv file
+    :param include_header: (bool) write the header if set to True, else ignore
+    :param by_alias: (bool) if True, records are stored by alias name
+    - fieldnames generated by model_json_schema has by_alias=True by default
+    - records generated by model_dump and model_dump_json has by_alias=False by default
     fieldnames can be subset of fields you wish to write in CSV
     constraints:
     1. records can be collection of Dict or List
@@ -199,16 +235,21 @@ def dict_or_list_records_csv_writer(file_name: str, records: Dict | List, fieldn
     if data_dir is None:
         data_dir = PurePath(__file__).parent / "data"
     csv_path = PurePath(data_dir / f"{file_name}.csv")
-    with open(csv_path, "w", encoding="utf-8", newline='') as fp:
+    mode: str = "w"  # write mode
+    if append_mode:
+        mode = "a"  # append mode
+    with open(csv_path, mode, encoding="utf-8", newline='') as fp:
         writer = csv.DictWriter(fp, fieldnames=fieldnames, extrasaction='ignore')
-        writer.writeheader()
+        if include_header:
+            writer.writeheader()
         if isinstance(records, Dict):
             for record in records.values():
-                json_dict = json.loads(record_type(**record.dict()).json())
+                json_dict = record.to_dict()
                 writer.writerow(json_dict)
         elif isinstance(records, List):
             for record in records:
-                writer.writerow(json.loads(record_type(**record.dict()).json()))
+                json_dict = record.to_dict()
+                writer.writerow(json_dict)
         else:
             raise Exception(
                 f"Unexpected: Un-supported type passed, expected Dict or List found type: {type(records)} of "
@@ -221,11 +262,18 @@ def get_csv_path_from_name_n_dir(file_name: str, data_dir: PurePath | None = Non
     return PurePath(data_dir / f"{file_name}.csv")
 
 
-def pandas_df_to_pydantic_obj_list(read_df, PydanticType: BaseModelOrItsDerivedType,
+def dec_hook(type: Type, obj: Any) -> Any:
+    if type == DateTime and isinstance(obj, str):
+        return pendulum.parse(obj)
+    elif type == DateTime and isinstance(obj, DateTime):
+        return obj
+    elif type == DateTime and isinstance(obj, datetime):
+        return pendulum.parse(str(obj))
+
+
+def pandas_df_to_pydantic_obj_list(read_df, MsgspecType: Type[MsgspecBaseModel],
                                    rename_col_names_to_snake_case: bool = False,
                                    rename_col_names_to_lower_case: bool = True):
-    class PydanticClassTypeList(BaseModel):
-        root: List[PydanticType]
 
     if rename_col_names_to_snake_case:
         # replace any space in col name with _ and convert name to snake_case
@@ -244,15 +292,14 @@ def pandas_df_to_pydantic_obj_list(read_df, PydanticType: BaseModelOrItsDerivedT
         read_df.rename(columns=old_to_new_col_name_dict, inplace=True)
     read_df = pd.DataFrame(read_df).replace({'': None})
     data_dict_list = read_df.to_dict(orient='records')
-    record_dict = {"root": data_dict_list}
-    pydantic_obj_list: PydanticClassTypeList = PydanticClassTypeList(**record_dict)
-    return pydantic_obj_list.root
+    msgspec_obj_dict = msgspec.convert(data_dict_list, type=List[MsgspecType], dec_hook=dec_hook, strict=False)
+    return msgspec_obj_dict
 
 
-def dict_or_list_records_csv_reader(file_name: str, PydanticType: BaseModelOrItsDerivedType,
+def dict_or_list_records_csv_reader(file_name: str, MsgspecType: Type[MsgspecBaseModel],
                                     data_dir: PurePath | None = None, rename_col_names_to_snake_case: bool = False,
                                     rename_col_names_to_lower_case: bool = True,
-                                    no_throw: bool = False) -> List[BaseModel]:
+                                    no_throw: bool = False) -> List[MsgspecBaseModel]:
     """
     At this time the method only supports list of pydantic_type extraction form csv
     """
@@ -264,7 +311,7 @@ def dict_or_list_records_csv_reader(file_name: str, PydanticType: BaseModelOrIts
     str_csv_path = str(csv_path)
     if os.path.exists(str_csv_path) and os.path.getsize(str_csv_path) > 0:
         read_df = pd.read_csv(csv_path, keep_default_na=False)
-        return pandas_df_to_pydantic_obj_list(read_df, PydanticType, rename_col_names_to_snake_case,
+        return pandas_df_to_pydantic_obj_list(read_df, MsgspecType, rename_col_names_to_snake_case,
                                               rename_col_names_to_lower_case)
     elif not no_throw:
         raise Exception(f"dict_or_list_records_csv_reader invoked on empty or no csv file: {str(csv_path)}")
@@ -276,12 +323,12 @@ def str_from_file(file_path: str) -> str:
         return fp.read()
 
 
-def get_json_array_as_pydantic_dict(json_key: str, json_data_list, PydanticType: Callable) \
-        -> Dict[str, BaseModelOrItsDerivedType]:
-    pydantic_dict: Dict[str, BaseModelOrItsDerivedType] = dict()
+def get_json_array_as_msgspec_dict(json_key: str, json_data_list, MsgspecType: Type[MsgspecBaseModel]
+                                   ) -> Dict[str, msgspec.Struct]:
+    pydantic_dict: Dict[str, msgspec.Struct] = dict()
     for json_data in json_data_list:
         pydantic_key = json_data[json_key]
-        pydantic_dict[pydantic_key] = PydanticType(**json_data)
+        pydantic_dict[pydantic_key] = MsgspecType(**json_data)
     return pydantic_dict
 
 
@@ -422,21 +469,21 @@ def load_from_pickle_file(file_name: str, data_dir: PurePath | None = None, mode
         return None  # file not found
 
 
-def makedir(path: str) -> None:
+def makedir(path: str | PurePath) -> None:
     """
     Function to make directory. Takes complete path as input argument.
     """
-    os.mkdir(path)
+    os.mkdir(path if isinstance(path, str) else str(path))
 
 
-def delete_file(path: str) -> None:
+def delete_file(path: str | PurePath) -> None:
     """
     Function to delete file. Takes complete path as input argument.
     """
-    os.remove(path)
+    os.remove(path if isinstance(path, str) else str(path))
 
 
-def file_exist(path: str) -> bool:
+def file_exist(path: str | PurePath) -> bool:
     """
     Function to check if file exists.
 
@@ -448,7 +495,7 @@ def file_exist(path: str) -> bool:
     -------
     bool: Returns True if file exists and else otherwise.
     """
-    return os.path.exists(path)
+    return os.path.exists(path if isinstance(path, str) else str(path))
 
 
 def is_file_updated(file_to_check: Path, last_read_ts=None):
@@ -658,6 +705,13 @@ class YAMLConfigurationManager:
     """
     load_yaml_mutex: threading.Lock = threading.Lock()
     path_to_content_dict: Dict[str, str] | Dict[str, Dict] = {}
+    first: bool = True
+
+    @staticmethod
+    def proxy_setting_boilerplate():
+        if YAMLConfigurationManager.first:
+            # add proxy settings
+            YAMLConfigurationManager.first = False
 
     @classmethod
     def _yaml_loader(cls, file_path: str) -> Dict:
@@ -676,7 +730,10 @@ class YAMLConfigurationManager:
     @classmethod
     def load_yaml_configurations(cls, config_file_path: str | None = None,
                                  default_config_file_path: str | None = "configurations.yaml",
-                                 load_as_str: bool = False) -> Dict | str:
+                                 load_as_str: bool = False) -> Dict[any, any] | str:
+        # boiler debug prints for all project proxy settings, DO NOT DELETE
+        YAMLConfigurationManager.proxy_setting_boilerplate()
+
         if config_file_path is None:
             with cls.load_yaml_mutex:
                 if default_config_file_path in cls.path_to_content_dict:
@@ -889,12 +946,12 @@ def compare_n_patch_list(stored_list: List, updated_list: List):
                     raise Exception(err_str)
 
             for nested_updated_list in updated_list:
-                    nested_stored_list = _find_matching_list(nested_updated_list, stored_list)
-                    if nested_stored_list is None:
-                        # this underlying updated list is new - append to stored_list (stored list of list)
-                        stored_list.append(nested_updated_list)
-                    else:
-                        compare_n_patch_list(nested_stored_list, nested_updated_list)
+                nested_stored_list = _find_matching_list(nested_updated_list, stored_list)
+                if nested_stored_list is None:
+                    # this underlying updated list is new - append to stored_list (stored list of list)
+                    stored_list.append(nested_updated_list)
+                else:
+                    compare_n_patch_list(nested_stored_list, nested_updated_list)
 
         elif isinstance(stored_list[0], dict):
             # Validation all elements of updated list must be of dict type
@@ -946,7 +1003,7 @@ def compare_n_patch_list(stored_list: List, updated_list: List):
             else:
                 stored_list.extend(updated_list)
                 return stored_list
-        else:  # non container type list are just extended
+        else:  # non container type list are just extended [no deleted possible - use put if delete is your use case]
             stored_list.extend(updated_list)
             return stored_list
     else:
@@ -956,8 +1013,7 @@ def compare_n_patch_list(stored_list: List, updated_list: List):
                 # Validating all elements of update list with taking first element as reference
                 if not type(update_item) == update_dict_type:
                     err_str = (f"All updated_list's elements must be of same type, found mismatch in element types "
-                               f"- ignoring this update call;;; "
-                               f"updated_list: {update_item}")
+                               f"- ignoring this update call;;;{update_item=}")
                     logging.exception(err_str)
                     raise Exception(err_str)
 
@@ -1091,6 +1147,27 @@ def get_mongo_db_list(mongo_server_uri: str) -> List[str]:
     return client.list_database_names()
 
 
+def log_weekday_file_fetch_failure(failure_data_list: List[Tuple[PurePath, datetime, datetime, datetime]],
+                                   err_prefix: str):
+    """
+    Args:
+        failure_data_list: tuple; data_file_local_path, try_day, immediate_prev_weekday, next_immediate_prev_weekday
+        err_prefix:
+    Returns:
+
+    """
+    if not failure_data_list:
+        return
+    failure_data: Tuple[PurePath, datetime, datetime, datetime]
+    for failure_data in failure_data_list:
+        data_file_local_path, try_day, immediate_prev_weekday, next_immediate_prev_weekday = failure_data
+        err_prefix += (f"{try_day} immediate_prev_weekday: {immediate_prev_weekday} data_file_path either not found"
+                       f" or is 0 bytes: {data_file_local_path}, tried dwh server/local both; re-trying with next "
+                       f"previous work day: {next_immediate_prev_weekday}")
+    if err_prefix:
+        logging.error(err_prefix)
+
+
 def delete_mongo_document(mongo_server_uri: str, database_name: str,
                           collection_name: str, delete_filter: Dict) -> bool:
     client: MongoClient | None = None
@@ -1177,74 +1254,6 @@ def year_month_day_str_from_datetime(any_date: datetime = datetime.now()) -> Tup
         return year_str, month_str, day_str
     else:
         return None, None, None
-
-
-def get_timeit_pattern() -> str:
-    return "_timeit_"
-
-
-def get_timeit_field_separator() -> str:
-    return "~"
-
-
-def get_time_it_log_pattern(callable_name: str, start_time: DateTime, delta: float, project_name: str):
-    time_it_pattern: str = get_timeit_pattern()
-    field_separator: str = get_timeit_field_separator()
-    pattern_str = (f"{time_it_pattern}{callable_name}{field_separator}{start_time}"
-                   f"{field_separator}{delta}{field_separator}{project_name}{time_it_pattern}")
-    return pattern_str
-
-
-# Decorator Function
-def perf_benchmark(project_name: str | None = None):
-    def perf_benchmark_(func_callable):
-        @functools.wraps(func_callable)
-        async def benchmarker(*args, **kwargs):
-            lvl_names_mapping = logging.getLevelNamesMapping()
-
-            if "TIMING" in lvl_names_mapping:
-                logger = logging.getLogger()
-                if logger.getEffectiveLevel() <= logging.TIMING:
-                    call_date_time = DateTime.utcnow()
-                    start_time = timeit.default_timer()
-                    return_val = await func_callable(*args, **kwargs)
-                    end_time = timeit.default_timer()
-                    delta = parse_to_float(f"{(end_time - start_time):.6f}")
-                    pattern_str = get_time_it_log_pattern(func_callable.__name__, call_date_time, delta, project_name)
-                    logging.timing(pattern_str)
-                else:
-                    return_val = await func_callable(*args, **kwargs)
-            else:
-                return_val = await func_callable(*args, **kwargs)
-            return return_val
-
-        return benchmarker
-    return perf_benchmark_
-
-
-def perf_benchmark_sync_callable(project_name: str | None = None):
-    def perf_benchmark_sync_callable_(func_callable):
-        def benchmarker(*args, **kwargs):
-            lvl_names_mapping = logging.getLevelNamesMapping()
-
-            if "TIMING" in lvl_names_mapping:
-                logger = logging.getLogger()
-                if logger.getEffectiveLevel() <= logging.TIMING:
-                    call_date_time = DateTime.utcnow()
-                    start_time = timeit.default_timer()
-                    return_val = func_callable(*args, **kwargs)
-                    end_time = timeit.default_timer()
-                    delta = parse_to_float(f"{(end_time - start_time):.6f}")
-
-                    pattern_str = get_time_it_log_pattern(func_callable.__name__, call_date_time, delta, project_name)
-                    logging.timing(pattern_str)
-                else:
-                    return_val = func_callable(*args, **kwargs)
-            else:
-                return_val = func_callable(*args, **kwargs)
-            return return_val
-        return benchmarker
-    return perf_benchmark_sync_callable_
 
 
 def parse_to_int(int_str: str | int | float, raise_exception: bool = True) -> int | None:
@@ -1336,9 +1345,10 @@ def get_native_host_n_port_from_config_dict(config_dict: Dict) -> Tuple[str, int
     return host, port
 
 
-async def execute_tasks_list_with_all_completed(tasks_list: List[asyncio.Task],
-                                                pydantic_class_type: Type[DocType] | Type[BaseModel] | None = None,
-                                                timeout: float = 20.0):
+async def execute_tasks_list_with_all_completed(
+        tasks_list: List[asyncio.Task],
+        pydantic_class_type: Type[DocType] | Type[BaseModel] | Type[dataclass] | None = None,
+        timeout: float = 20.0):
     pending_tasks: Set[asyncio.Task] | None = None
     completed_tasks: Set[asyncio.Task] | None = None
     if tasks_list:
@@ -1369,8 +1379,8 @@ async def execute_tasks_list_with_all_completed(tasks_list: List[asyncio.Task],
             completed_task = completed_tasks.pop()
             _ = completed_task.result()  # triggers exceptions if any raised
         except Exception as e:
-            logging.exception(f"execute_tasks_list_with_all_completed failed for task name: {completed_task.get_name()}"
-                              f", task: {completed_task} with exception: {e}")
+            logging.exception(f"execute_tasks_list_with_all_completed failed for {completed_task.get_name()=} with "
+                              f"exception: {e};;;{completed_task=}")
     if pending_tasks:
         logging.error("Received timed out pending tasks from asyncio.wait, dropping them. "
                       f"PendingTasks: {[pending_task for pending_task in pending_tasks]}")
@@ -1409,6 +1419,10 @@ async def execute_tasks_list_with_first_completed(tasks_list: List[asyncio.Task]
                                     f"{completed_task.get_name()};;; Exception: {e}")
 
 
+def get_symbol_side_pattern():
+    return "%%"
+
+
 async def submit_task_with_first_completed_wait(tasks_list: List[asyncio.Task],
                                                 timeout: float = 60.0):
     res_list = []
@@ -1444,13 +1458,7 @@ def except_n_log_alert():
             try:
                 result = original_function(*args, **kwargs)
             except Exception as e:
-                exc_type, exc_obj, exc_tb = sys.exc_info()
-                filename = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
-                alert_brief: str = f"exception: {e} while attempting {original_function.__name__}, " \
-                                   f"date-time: {DateTime.now()}"
-                alert_details: str = f"{exc_type}: file: {filename}, line: {exc_tb.tb_lineno}, args: {args}, " \
-                                     f"kwargs: {kwargs}"
-                logging.exception(f"{alert_brief};;; {alert_details}")
+                logging.exception(f"exception caught in decorator_function@wrapper_function: {e}")
             return result
         return wrapper_function
     return decorator_function
@@ -1531,7 +1539,7 @@ def get_pid_from_port(port: int):
                 if conn.pid:
                     return conn.pid
         else:
-            logging.error("Can't find pid with port")
+            logging.error(f"Can't find pid with {port=}")
     except Exception as e:
         logging.error(f"get_pid_from_port failed, exception: {e}")
 
@@ -1555,10 +1563,14 @@ def get_pid_from_port(port: int):
 #     except psutil.NoSuchProcess:
 #         return False
 
-def is_process_running(pid: int) -> bool:
+
+def is_process_running(pid: int | None) -> bool:
+    if pid is None:
+        return False
     if psutil.pid_exists(pid):
         try:
             process = psutil.Process(pid)
+            # defunct process
             if process.status() == psutil.STATUS_ZOMBIE:
                 return False
             return True
@@ -1642,6 +1654,8 @@ def get_log_line_no_from_timestamp(log_file_path: str, timestamp: str) -> str | 
 
 
 def get_last_log_line_date_time(log_file_path: str) -> str | None:
+    if not os.path.exists(log_file_path):
+        return None
     cmd = f"tail -n 1 {log_file_path} | awk " + "'{print $1, $2}'"
     out = subprocess.check_output(cmd, shell=True)
     line_no = out.decode("utf-8")
@@ -1692,3 +1706,111 @@ def handle_refresh_configurable_data_members(
         else:
             logging.error(f"Can't find key {config_key=!r} in updated snapshot of config yaml - "
                           f"ignoring this update")
+
+
+def getmtime_from_linux_cmd(file_path: str) -> float | None:
+    if not file_exist(file_path):
+        return None
+
+    cmd: str = f"stat -c %Y {file_path}"
+    process: subprocess.Popen = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                                 text=True)
+    output, error = process.communicate()
+
+    if error:
+        logging.error(f"getmtime_from_linux_cmd failed, {error=}")
+        return None
+    if output:
+        modified_time_str: str = output.strip()
+        modified_time: float = parse_to_float(modified_time_str)
+        return modified_time
+    # else not needed - return None in all other case
+    return None
+
+
+def is_file_modified(file_path: str, last_modified_time: float | None = None) -> Tuple[bool, float | None]:
+    modified_status_from_python_os: bool = False
+    modified_status_from_linux_cmd: bool = False
+    # ignore milliseconds comparison
+    if last_modified_time:
+        last_modified_time = float(int(last_modified_time))
+
+    if not file_exist(file_path):
+        # file is removed, return modified status as True
+        if last_modified_time:
+            return True, None
+        # no last_modified_time implies file did not exist previously
+        # return modified status as False
+        return False, None
+
+    # file exists
+    modified_time_from_linux_cmd: float | None = getmtime_from_linux_cmd(file_path)
+    if modified_time_from_linux_cmd != last_modified_time:
+        modified_status_from_linux_cmd = True
+    modified_time_from_python_os: float | None = os.path.getmtime(file_path)
+    modified_time_from_python_os_without_ms: float = float(int(modified_time_from_python_os))
+    if modified_time_from_python_os_without_ms != last_modified_time:
+        modified_status_from_python_os = True
+    # verify consistency of python os vs linux cmd
+    if modified_status_from_linux_cmd != modified_status_from_python_os:
+        logging.error(f"")
+        return True, modified_time_from_python_os
+    # modified status is consistent for python os and linux cmd
+    return modified_status_from_python_os, modified_time_from_python_os
+
+
+def encrypt_file(file_path: str, encrypted_file_path: str | None = None):
+    if not file_exist(file_path):
+        raise Exception(f"encrypt_file failed, file to be encrypted does not exist, {file_path=}")
+    if not encrypted_file_path:
+        encrypted_file_path = f"{file_path}.enc"
+    # else not required - encrypted file path is set
+    password = getpass.getpass(prompt='Enter passphrase for encryption: ')
+    try:
+        with subprocess.Popen(
+                ['openssl', 'enc', '-aes-256-cbc', '-salt', '-in', file_path, '-out', encrypted_file_path,
+                 '-pass', 'stdin'],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+            process.communicate(input=password.encode())
+        logging.debug(f"File '{file_path}' encrypted to '{encrypted_file_path}'")
+    except subprocess.CalledProcessError as e:
+        logging.error(f"encrypt_file failed: {e}")
+
+
+def decrypt_file(file_path: str, decrypted_file_path: str | None = None):
+    if not file_exist(file_path):
+        raise Exception(f"encrypt_file failed, file to be encrypted does not exist, {file_path=}")
+    if not decrypted_file_path:
+        if file_path.endswith(".enc"):
+            decrypted_file_path = file_path.replace(".enc", "")
+        else:
+            raise Exception("decrypt_file failed, decrypted_file_path not provided and file_path does not end with "
+                            "'.enc'")
+    # else not required - decrypted file path is set
+    password = getpass.getpass(prompt='Enter passphrase for decryption: ')
+    try:
+        with subprocess.Popen(
+                ['openssl', 'enc', '-d', '-aes-256-cbc', '-salt', '-in', file_path, '-out', decrypted_file_path,
+                 '-pass', 'stdin'],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+            process.communicate(input=password.encode())
+        logging.debug(f"File '{file_path}' decrypted to '{decrypted_file_path}'")
+    except subprocess.CalledProcessError as e:
+        logging.error(f"decrypt_file failed: {e}")
+
+
+if __name__ == "__main__":
+    def main():
+        print(f"pre-create: \n{os.listdir()}")
+        file_path = Path("test.py")
+        file_path.touch()
+        print(f"post-create: \n{os.listdir()}")
+        update_time = is_file_updated(file_path)
+        file_path.touch()  # update time stamp is newer now
+        new_update_time = is_file_updated(file_path)
+        assert(new_update_time > update_time)
+        file_path.unlink()
+        print(f"post-delete: \n{os.listdir()}")
+        print("Done")
+
+    main()

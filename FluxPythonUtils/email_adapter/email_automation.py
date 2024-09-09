@@ -4,7 +4,7 @@ from typing import List, Final, Dict
 
 # from FluxPythonUtils.email_adapter.email_handler import EmailHandler
 from FluxPythonUtils.email_adapter.email_client import EmailClient, Attachment, EmailUser
-from config.configuration import Configuration
+from FluxPythonUtils.email_adapter.config.configuration import Configuration
 
 # FluxPythonUtils modules
 from FluxPythonUtils.scripts.utility_functions import YAMLConfigurationManager, configure_logger
@@ -41,8 +41,8 @@ if __name__ == "__main__":
             config["cyinve_email"]["address"]
         )]
         cc_addresses: List[EmailUser] = [EmailUser(
-            config["tanishq_email"]["username"],
-            config["tanishq_email"]["address"]
+            config["outlook_email"]["username"],
+            config["outlook_email"]["address"]
         )]
         mail_subject: str = "Test"
         mail_body: str = "Testing mail with attachments"
@@ -67,7 +67,7 @@ if __name__ == "__main__":
 
         # Test-case: Search Email
         # searched_mails: List[Email] = email_automation.search_mails(
-        #     from_address= "tanishq.chandra19@outlook.com",
+        #     from_address= "someemail@outlook.com",
         #     contained_string_subject="test",
         #     contained_string_body="test")
         #

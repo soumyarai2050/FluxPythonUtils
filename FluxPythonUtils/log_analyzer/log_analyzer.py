@@ -1,8 +1,6 @@
 # standard imports
-import datetime
 import logging
 import os
-import sys
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -20,15 +18,17 @@ from filelock import FileLock
 import inspect
 
 # 3rd part imports
-from pydantic import BaseModel, ConfigDict
-from pendulum import DateTime, parse
+from pendulum import DateTime
 import pendulum
 import setproctitle
 
 # project imports
 from FluxPythonUtils.scripts.utility_functions import (
-    parse_to_float, parse_to_int, get_timeit_pattern, get_timeit_field_separator, re_pattern_to_grep,
-    get_log_line_no_from_timestamp)
+    parse_to_int, re_pattern_to_grep,
+    get_log_line_no_from_timestamp, is_file_modified)
+from Flux.PyCodeGenEngine.FluxCodeGenCore.perf_benchmark_decorators import (get_timeit_pattern,
+                                                                            get_timeit_field_separator)
+from FluxPythonUtils.scripts.model_base_utils import MsgspecBaseModel
 
 
 def get_transaction_counts_n_timeout_from_config(config_yaml_dict: Dict | None,
@@ -50,7 +50,7 @@ def get_transaction_counts_n_timeout_from_config(config_yaml_dict: Dict | None,
     return transaction_counts_per_call, transaction_timeout_secs
 
 
-class LogDetail(BaseModel):
+class LogDetail(MsgspecBaseModel, kw_only=True):
     service: str
     log_file_path: str
     is_running: bool = True
@@ -63,9 +63,8 @@ class LogDetail(BaseModel):
     process: subprocess.Popen | None = None
     poll_timeout: float = 60.0   # seconds
     processed_timestamp: str | None = None
+    data_snapshot_version: float | None = None
     last_processed_utc_datetime: DateTime = DateTime.utcnow()
-    # required to use WebSocket as field type since it is arbitrary type
-    model_config = ConfigDict(populate_by_name=True, arbitrary_types_allowed=True)
 
 
 class LogAnalyzer(ABC):
@@ -144,7 +143,7 @@ class LogAnalyzer(ABC):
             if log_file_path not in pattern_matched_added_file_path_to_service_dict:
                 logging.info(
                     f"Can't find {log_file_path=} in log analyzer cache dict keys used to avoid repeated file "
-                    f"tail executor start;;; {pattern_matched_added_file_path_to_service_dict=}")
+                    f"tail executor start{LogAnalyzer.log_seperator}{pattern_matched_added_file_path_to_service_dict=}")
             else:
                 pattern_matched_added_file_path_to_service_dict.pop(log_file_path)
 
@@ -164,7 +163,7 @@ class LogAnalyzer(ABC):
     @staticmethod
     def _handle_log_file_path_is_regex(log_detail_type: Type[LogDetail], log_details_queue: queue.Queue,
                                        log_detail: LogDetail, pattern_matched_file_path: str):
-        new_log_detail = log_detail_type(**log_detail.model_dump())
+        new_log_detail = log_detail_type(**log_detail.to_dict())
         new_log_detail.log_file_path = pattern_matched_file_path
         log_details_queue.put(new_log_detail)
         logging.info(
@@ -308,7 +307,7 @@ class LogAnalyzer(ABC):
 
     def refresh_regex_list(self) -> None:
         """
-        checks if the suppress alert regex file is updated. If updated loads the updated regex list
+        checks if the supress alert regex file is updated. If updated loads the updated regex list
         return True if regex file is modified
         return False if regex file is not present or not modified
         """
@@ -319,8 +318,8 @@ class LogAnalyzer(ABC):
             regex_list_updated: bool = False
             with FileLock(self.regex_lock_file):
                 if os.path.exists(self.regex_file):
-                    modified_time: float = os.path.getmtime(self.regex_file)
-                    if modified_time != self.regex_file_data_snapshot_version:
+                    is_modified, modified_time = is_file_modified(self.regex_file, self.regex_file_data_snapshot_version)
+                    if is_modified:
                         # regex file updated. loading regex list
                         self._load_regex_list()
                         self.regex_file_data_snapshot_version = modified_time
@@ -572,8 +571,8 @@ class LogAnalyzer(ABC):
         pattern: re.Pattern = re.compile(log_prefix_pattern)
         match = pattern.search(log_line)
         if not match:
-            logging.error(f"_get_log_prefix_n_message failed. Failed to find match for {log_prefix_pattern=} "
-                          f"in {log_line=}")
+            # logging.error(f"_get_log_prefix_n_message failed. Failed to find match for {log_prefix_pattern=} "
+            #               f"in {log_line=}")
             return None, None, None, None, None
 
         log_prefix: str = match.group(0)
@@ -624,7 +623,16 @@ class LogAnalyzer(ABC):
         :param log_detail: Object of LogDetail at the time of no activity is found
         :return: None
         """
-        raise NotImplementedError("handle_no_activity not implemented in derived class")
+        raise NotImplementedError("notify_no_activity not implemented in derived class")
+
+    @abstractmethod
+    def notify_unexpected_activity(self, log_detail: LogDetail):
+        """
+        Handling to be implemented to notify in derived class when there is activity in the log file but not expected
+        :param log_detail: Object of LogDetail at the time of unexpected activity
+        :return:
+        """
+        raise NotImplementedError("notify_unexpected_activity not implemented in derived class")
 
     @abstractmethod
     def notify_tail_event_in_log_service(self, severity: str, brief_msg_str: str, detail_msg_str: str,
