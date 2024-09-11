@@ -29,7 +29,6 @@ import json
 import getpass
 
 # 3rd party packages
-from pydantic import BaseModel
 import pandas as pd
 from pymongo import MongoClient
 # import pymongoarrow.monkey
@@ -292,7 +291,8 @@ def pandas_df_to_pydantic_obj_list(read_df, MsgspecType: Type[MsgspecBaseModel],
         read_df.rename(columns=old_to_new_col_name_dict, inplace=True)
     read_df = pd.DataFrame(read_df).replace({'': None})
     data_dict_list = read_df.to_dict(orient='records')
-    msgspec_obj_dict = msgspec.convert(data_dict_list, type=List[MsgspecType], dec_hook=dec_hook, strict=False)
+    msgspec_obj_dict = MsgspecType.from_dict_list(data_dict_list, strict=False)
+
     return msgspec_obj_dict
 
 
@@ -1347,7 +1347,7 @@ def get_native_host_n_port_from_config_dict(config_dict: Dict) -> Tuple[str, int
 
 async def execute_tasks_list_with_all_completed(
         tasks_list: List[asyncio.Task],
-        pydantic_class_type: Type[DocType] | Type[BaseModel] | Type[dataclass] | None = None,
+        pydantic_class_type: Type[DocType] | Type[dataclass] | Type[MsgspecBaseModel] | None = None,
         timeout: float = 20.0):
     pending_tasks: Set[asyncio.Task] | None = None
     completed_tasks: Set[asyncio.Task] | None = None

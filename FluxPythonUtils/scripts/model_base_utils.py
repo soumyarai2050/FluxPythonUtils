@@ -16,6 +16,7 @@ import msgspec
 import os
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import Response
+from pandas import Timestamp
 
 
 def to_camel(value):
@@ -157,10 +158,14 @@ def dec_hook(type: Type, obj: Any) -> Any:
 def enc_hook(obj: Any) -> Any:
     if isinstance(obj, DateTime):
         return obj.isoformat()
+    elif isinstance(obj, datetime.datetime):
+        return obj.isoformat()
+    elif isinstance(obj, Timestamp):
+        return obj.isoformat()
 
 
 class MsgspecBaseModel(msgspec.Struct, kw_only=True):
-    custom_builtin_types = [DateTime, types.FunctionType]
+    custom_builtin_types = [DateTime, types.FunctionType, Timestamp, datetime.datetime]
 
     @classmethod
     def from_json_str(cls, json_str: bytes | str, **kwargs):
@@ -171,6 +176,11 @@ class MsgspecBaseModel(msgspec.Struct, kw_only=True):
     def from_dict(cls, args_dict: Dict, **kwargs):
         strict = kwargs.pop("strict", True)
         return msgspec.convert(args_dict, type=cls, dec_hook=dec_hook, strict=strict)
+
+    @classmethod
+    def from_dict_list(cls, args_dict_list: List[Dict], **kwargs):
+        strict = kwargs.pop("strict", True)
+        return msgspec.convert(args_dict_list, type=List[cls], dec_hook=dec_hook, strict=strict)
 
     @classmethod
     def from_kwargs(cls, **kwargs):
@@ -299,8 +309,16 @@ class IncrementalIdMsgspec(MsgspecBaseModel, kw_only=True):
         This method must be called just after db is initialized, and it must be
         passed with current max id (if recovering) or 0 (if starting fresh)
         """
-        cls._max_id_val = max_id_val
-        cls._max_update_id_val = max_update_id_val
+        if cls._max_id_val is None:
+            cls._max_id_val = max_id_val
+        else:
+            if cls._max_id_val < max_id_val:    # sets whatever is max if is called for nested type inits
+                cls._max_id_val = max_id_val
+            # else not required: if set values is already bigger than passed value then ignoring
+
+        if max_update_id_val is not None:
+            cls._max_update_id_val = max_update_id_val
+        # else not required: set value if not None
 
     @classmethod
     def peek_max_id(cls) -> int:
