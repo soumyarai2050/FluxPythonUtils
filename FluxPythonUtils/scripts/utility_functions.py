@@ -99,6 +99,25 @@ def log_n_except(original_function):
     return wrapper_function
 
 
+def empty_as_none(val: float | int | str | None):
+    if val == "":
+        val = None
+    return val
+
+
+def transform_to_str(val: float | int | str | None):
+    if val is not None:
+        val = str(val)
+    return val
+
+
+def str_to_datetime(val: str | None, datetime_format: str = "%Y-%m-%d %H:%M:%S%z"):
+    if val is not None and isinstance(val, str):
+        # convert from string format to datetime format
+        return datetime.strptime(val, datetime_format)
+    return val
+
+
 def nan_inf_as_none(val: float | int | None):
     """
     useful for data coming from data frame sources where we may get Nan or INF numeric values
@@ -328,7 +347,7 @@ def get_json_array_as_msgspec_dict(json_key: str, json_data_list, MsgspecType: T
     pydantic_dict: Dict[str, msgspec.Struct] = dict()
     for json_data in json_data_list:
         pydantic_key = json_data[json_key]
-        pydantic_dict[pydantic_key] = MsgspecType(**json_data)
+        pydantic_dict[pydantic_key] = MsgspecType.from_kwargs(**json_data)
     return pydantic_dict
 
 
@@ -731,7 +750,7 @@ class YAMLConfigurationManager:
     def load_yaml_configurations(cls, config_file_path: str | None = None,
                                  default_config_file_path: str | None = "configurations.yaml",
                                  load_as_str: bool = False) -> Dict[any, any] | str:
-        # boiler debug prints for all project proxy settings, DO NOT DELETE
+        # boilerplate debug prints for all project proxy settings, DO NOT DELETE
         YAMLConfigurationManager.proxy_setting_boilerplate()
 
         if config_file_path is None:
@@ -1003,7 +1022,7 @@ def compare_n_patch_list(stored_list: List, updated_list: List):
             else:
                 stored_list.extend(updated_list)
                 return stored_list
-        else:  # non container type list are just extended [no deleted possible - use put if delete is your use case]
+        else:  # non container type list are just extended [no deletes possible - use put if delete is your use case]
             stored_list.extend(updated_list)
             return stored_list
     else:
@@ -1030,7 +1049,7 @@ def compare_n_patch_list(stored_list: List, updated_list: List):
 
 def compare_n_patch_dict(stored_dict: Dict, updated_dict: Dict):
     for key, updated_value in updated_dict.items():
-        stored_value = stored_dict[key]
+        stored_value = stored_dict.get(key)
         if isinstance(stored_value, dict):
             if updated_value is not None:
                 # dict value type is container, pass extracted (reference modified directly)
@@ -1751,12 +1770,24 @@ def is_file_modified(file_path: str, last_modified_time: float | None = None) ->
     modified_time_from_python_os_without_ms: float = float(int(modified_time_from_python_os))
     if modified_time_from_python_os_without_ms != last_modified_time:
         modified_status_from_python_os = True
-    # verify consistency of python os vs linux cmd
+    # verify consistency of python os module vs linux cmd
     if modified_status_from_linux_cmd != modified_status_from_python_os:
-        logging.error(f"")
+        logging.error(f"Incorrect file modified status found for {os.path.basename(file_path)=};;;"
+                      f"{modified_status_from_python_os=}, {modified_status_from_linux_cmd=}, "
+                      f"{modified_time_from_python_os}, {modified_time_from_linux_cmd}, {file_path=}")
         return True, modified_time_from_python_os
     # modified status is consistent for python os and linux cmd
     return modified_status_from_python_os, modified_time_from_python_os
+
+
+def set_package_logger_level(package_name: str, level: int):
+    if not package_name:
+        err_str_ = (f"set_package_logger_level failed, {package_name=} found None. setting logging level on "
+                    f"root logger is not supported")
+        logging.error(err_str_)
+        return
+    logging.debug(f"setting logger level for {package_name=} to {level=}")
+    logging.getLogger(package_name).setLevel(level)
 
 
 def encrypt_file(file_path: str, encrypted_file_path: str | None = None):

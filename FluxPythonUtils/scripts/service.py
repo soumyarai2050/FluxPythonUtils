@@ -5,12 +5,12 @@ class Service(object):
     """
     should ideally be first in multi inheritance or must have all preceding classes designed for multi-inheritance
     """
-    def __init__(self, *kwargs):  #
-        # super: refers next MRO; super called with kwargs allows both arg/no-arg inheritors subsequently
-        super().__init__()
-        # prevents consuming any market data order than current time
+    def __init__(self, **kwargs):  #
+        # super: refers next in MRO; super called with kwargs allows both arg/no-arg inheritors subsequently
+        super().__init__(**kwargs)
+        # prevents consuming any market data older than current time
         self.service_start_time: DateTime = DateTime.now()
-        # stabilization period: mark repeat logic related errors after this, otherwise they can be Info/Warn
+        # stabilization period: mark repeat logic related errors as errors after this, otherwise they can be Info/Warn
         self.stabilization_period_in_min: int = 2
         self.stabilization_period_past_service_start: bool = False
 
@@ -22,5 +22,5 @@ class Service(object):
             if delta_in_min > self.stabilization_period_in_min:
                 self.stabilization_period_past_service_start = True
                 return self.stabilization_period_past_service_start
-        # else not need just return stabilization_period_past_service_start us sufficient - it's already false
+        # else not need just return stabilization_period_past_executor_start us sufficient - it's already false
         return self.stabilization_period_past_service_start

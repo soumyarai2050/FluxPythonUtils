@@ -193,6 +193,16 @@ class MsgspecBaseModel(msgspec.Struct, kw_only=True):
             return_val = remove_none_values(return_val)
         return return_val
 
+    def to_json_dict(self, **kwargs) -> Dict:
+        """
+        Converts obj to jsonable dict which converts datetime obj to str
+        """
+        exclude_none = kwargs.get("exclude_none", False)
+        return_val = msgspec.to_builtins(self, enc_hook=enc_hook)
+        if exclude_none:
+            return_val = remove_none_values(return_val)
+        return return_val
+
     def to_json_str(self, **kwargs) -> str | bytes:
         return msgspec.json.encode(self, enc_hook=enc_hook)
 
@@ -304,21 +314,27 @@ class IncrementalIdMsgspec(MsgspecBaseModel, kw_only=True):
     read_ws_path_with_id_ws_connection_manager: ClassVar[Any] = None
 
     @classmethod
-    def init_max_id(cls, max_id_val: int, max_update_id_val: int) -> None:
+    def init_max_id(cls, max_id_val: int, max_update_id_val: int, force_set: bool | None = False) -> None:
         """
         This method must be called just after db is initialized, and it must be
         passed with current max id (if recovering) or 0 (if starting fresh)
         """
-        if cls._max_id_val is None:
+        if force_set:
             cls._max_id_val = max_id_val
         else:
-            if cls._max_id_val < max_id_val:    # sets whatever is max if is called for nested type inits
+            if cls._max_id_val is None:
                 cls._max_id_val = max_id_val
-            # else not required: if set values is already bigger than passed value then ignoring
+            else:
+                if cls._max_id_val < max_id_val:    # sets whatever is max if is called for nested type inits
+                    cls._max_id_val = max_id_val
+                # else not required: if set values is already bigger than passed value then ignoring
 
-        if max_update_id_val is not None:
+        if force_set:
             cls._max_update_id_val = max_update_id_val
-        # else not required: set value if not None
+        else:
+            if max_update_id_val is not None:
+                cls._max_update_id_val = max_update_id_val
+            # else not required: set value if not None
 
     @classmethod
     def peek_max_id(cls) -> int:
