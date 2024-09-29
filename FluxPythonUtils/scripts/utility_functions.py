@@ -1830,6 +1830,13 @@ def decrypt_file(file_path: str, decrypted_file_path: str | None = None):
         logging.error(f"decrypt_file failed: {e}")
 
 
+def default_json_serializer(obj):
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    else:
+        return str(obj)
+
+
 if __name__ == "__main__":
     def main():
         print(f"pre-create: \n{os.listdir()}")
