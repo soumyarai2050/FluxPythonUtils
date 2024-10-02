@@ -261,7 +261,9 @@ class LogAnalyzer(ABC):
     @classmethod
     def dynamic_start_log_analyzer_for_log_details(
             cls, log_details_queue: multiprocessing.Queue,
+            file_path_to_process_cache_lock: Lock,
             file_path_to_process_cache_dict: Dict[str, List[multiprocessing.Process]],
+            file_path_to_log_detail_cache_lock: Lock,
             file_path_to_log_detail_cache_dict: Dict[str, List[LogDetail]],
             spawn, start_datetime_fmt_str: str, **kwargs):
         while True:
@@ -285,17 +287,19 @@ class LogAnalyzer(ABC):
             process.start()
             logging.info(f"started tail executor for {log_detail.log_file_path}")
 
-            process_list = file_path_to_process_cache_dict.get(log_detail.log_file_path)
-            if process_list is None:
-                file_path_to_process_cache_dict[log_detail.log_file_path] = [process]
-            else:
-                process_list.append(process)
+            with file_path_to_process_cache_lock:
+                process_list = file_path_to_process_cache_dict.get(log_detail.log_file_path)
+                if process_list is None:
+                    file_path_to_process_cache_dict[log_detail.log_file_path] = [process]
+                else:
+                    process_list.append(process)
 
-            log_detail_list = file_path_to_log_detail_cache_dict.get(log_detail.log_file_path)
-            if log_detail_list is None:
-                file_path_to_log_detail_cache_dict[log_detail.log_file_path] = [log_detail]
-            else:
-                log_detail_list.append(log_detail)
+            with file_path_to_log_detail_cache_lock:
+                log_detail_list = file_path_to_log_detail_cache_dict.get(log_detail.log_file_path)
+                if log_detail_list is None:
+                    file_path_to_log_detail_cache_dict[log_detail.log_file_path] = [log_detail]
+                else:
+                    log_detail_list.append(log_detail)
 
     def _load_regex_list(self) -> None:
         if os.path.exists(self.regex_file):

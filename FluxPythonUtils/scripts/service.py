@@ -22,5 +22,5 @@ class Service(object):
             if delta_in_min > self.stabilization_period_in_min:
                 self.stabilization_period_past_service_start = True
                 return self.stabilization_period_past_service_start
-        # else not need just return stabilization_period_past_executor_start us sufficient - it's already false
+        # else not needed just return stabilization_period_past_executor_start is sufficient - it's already false
         return self.stabilization_period_past_service_start

@@ -1830,7 +1830,13 @@ def decrypt_file(file_path: str, decrypted_file_path: str | None = None):
         logging.error(f"decrypt_file failed: {e}")
 
 
-def default_json_serializer(obj):
+def non_jsonable_types_handler(obj):
+    """
+    Converts datetime type to iso formated string while serializing to json str/bytes
+    For any other type - converts to str
+    :param obj:
+    :return:
+    """
     if isinstance(obj, datetime):
         return obj.isoformat()
     else:
