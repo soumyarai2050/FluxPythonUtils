@@ -1843,6 +1843,13 @@ def non_jsonable_types_handler(obj):
         return str(obj)
 
 
+def convert_pendulum_to_datetime(pendulum_dt_obj: DateTime):
+    datetime_obj = datetime(pendulum_dt_obj.year, pendulum_dt_obj.month, pendulum_dt_obj.day,
+                            pendulum_dt_obj.hour, pendulum_dt_obj.minute, pendulum_dt_obj.second,
+                            pendulum_dt_obj.microsecond, pendulum_dt_obj.tzinfo)
+    return datetime_obj
+
+
 if __name__ == "__main__":
     def main():
         print(f"pre-create: \n{os.listdir()}")
