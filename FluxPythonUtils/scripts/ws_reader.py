@@ -20,7 +20,7 @@ class WSReader(WSReaderLite):
     size_8_mb: Final[int] = size_1_mb * 8
     size_10_mb: Final[int] = size_1_mb * 10
     no_warn_size_mb: Final[int] = size_8_mb
-    max_ws_buff_size: ClassVar[int] = size_10_mb
+    max_ws_buff_size: ClassVar[int] = size_16_mb
 
     @classmethod
     def start(cls):
@@ -96,7 +96,7 @@ class WSReader(WSReaderLite):
             json_data = json.loads(json_str)
         except Exception as e:
             logging.exception(f"dropping update, json loads failed, no json_data from json_str"
-                              f"first update for {ws_cont.PydanticClassTypeList}"
+                              f"first update for {ws_cont.ModelClassTypeList}"
                               f";;;Json str: {json_str}, exception: {e}")
         if json_str.startswith("{") and json_str.endswith("}"):
             model_obj = WSReader.read_model_obj(json_str, ws_cont.ModelClassType)
@@ -125,9 +125,9 @@ class WSReader(WSReaderLite):
                 # size, for eg: max_size=2**24 to change the limit to 16 MB
                 ws_cont.ws = await websockets.connect(ws_cont.uri, ping_timeout=None, max_size=cls.max_ws_buff_size)
                 task = asyncio.create_task(ws_cont.ws.recv(), name=str(idx))
-            except Exception as e:
+            except Exception as exp:
                 logging.exception(f"ws_client error while connecting/async task submission ws_cont: {ws_cont}, "
-                                  f"exception: {e}")
+                                  f"exception: {exp}")
                 ws_cont.force_disconnected = True
             else:
                 pending_tasks.append(task)
@@ -139,47 +139,42 @@ class WSReader(WSReaderLite):
                 # make timeout configurable with default 2 in debug explicitly keep 20++ by configuring it such ?
                 completed_tasks, pending_tasks = await asyncio.wait(pending_tasks, return_when=asyncio.FIRST_COMPLETED,
                                                                     timeout=20.0)
-            except Exception as e:
-                logging.exception(f"await asyncio.wait raised exception: {e}")
+            except Exception as exp:
+                logging.exception(f"await asyncio.wait raised exception: {exp}")
                 if not WSReader.shutdown:
                     continue
                 else:
                     break  # here we don't close any web-socket on purpose - as we can't be sure of the exception reason
             ws_remove_set.clear()
+            if WSReader.shutdown:  # disconnect pending_tasks here, completed_tasks after pop and result extraction
+                cls.disconnect_ws_tasks(pending_tasks)
+                pending_tasks = []  # breaks outer loop
             while completed_tasks:
-                if WSReader.shutdown:
-                    for task in pending_tasks:
-                        idx = int(task.get_name())
-                        logging.debug(f"closing web socket connection gracefully within while loop for idx {idx};;;"
-                                      f"ws_cont: {WSReader.ws_cont_list[idx]}")
-                        WSReader.ws_cont_list[idx].ws.disconnect()
-                        break
-
                 data_found_task = None
                 json_data: bytes | None = None
                 try:
                     data_found_task = completed_tasks.pop()
                     json_data = data_found_task.result()
-                except ConnectionClosedOK as e:
+                except ConnectionClosedOK as exp:
                     idx = int(data_found_task.get_name())
-                    logging.debug('\n', f"web socket connection closed gracefully within while loop for idx {idx};;;"
-                                        f" Exception: {e}")
+                    logging.debug('\n', f"web socket connection closed gracefully within while loop for "
+                                        f"{idx};;;{exp=}")
                     ws_remove_set.add(idx)
-                except ConnectionClosedError as e:
+                except ConnectionClosedError as exp:
                     idx = int(data_found_task.get_name())
-                    logging.exception('\n', f"web socket connection closed with error within while loop for idx {idx};;;"
-                                      f" Exception: {e}")
+                    logging.exception('\n', f"web socket connection closed with error within while loop for "
+                                            f"{idx=};;;{exp=}")
                     ws_remove_set.add(idx)
-                except ConnectionClosed as e:
+                except ConnectionClosed as exp:
                     idx = int(data_found_task.get_name())
-                    logging.debug('\n', f"web socket connection closed within while loop for idx  {idx}"
-                                        f"{data_found_task.get_name()};;; Exception: {e}")
+                    logging.debug('\n', f"web socket connection closed within while loop for {idx=}, "
+                                        f"{data_found_task.get_name()};;;{exp=}")
                     ws_remove_set.add(idx)
-                except Exception as e:
+                except Exception as exp:
                     idx = int(data_found_task.get_name())
-                    logging.debug('\n', f"web socket future returned exception within while loop for idx {idx}"
-                                        f"{data_found_task.get_name()};;; Exception: {e}")
-                    # should we remove this ws - maybe this is an intermittent error, improve handling case by case
+                    logging.debug('\n', f"web socket future returned exception within while loop for {idx=}, "
+                                        f"{data_found_task.get_name()};;;{exp=}")
+                    # TODO: should we remove this ws: maybe it is an intermittent error, improve handling case by case
                     ws_remove_set.add(idx)
 
                 if isinstance(json_data, bytes):
@@ -193,27 +188,40 @@ class WSReader(WSReaderLite):
                                   f"ws_reader: {WSReader.ws_cont_list[idx]}, found in ws_remove_set")
                     WSReader.ws_cont_list[idx].force_disconnected = True
                     continue
-
                 if json_str is not None:
+                    if WSReader.shutdown:
+                        # callback not to be called / relied upon once shutdown detected
+                        cls.disconnect_ws_tasks([WSReader.ws_cont_list[idx]])
+                        logging.warning(f"dropping ws {idx} {json_str}, due to {WSReader.shutdown=};;;{idx=}; "
+                                        f"{[WSReader.ws_cont_list[idx]]=}")
+                        continue
+                    # else not shutdown - proceed as normal
                     recreated_task = asyncio.create_task(WSReader.ws_cont_list[idx].ws.recv(), name=str(idx))
                     pending_tasks.add(recreated_task)
                     json_len: int = len(json_str)
+                    ws_cont_ = WSReader.ws_cont_list[idx]
                     if json_len > cls.no_warn_size_mb:
                         ws_json_len_mb = json_len / cls.size_1_mb
                         max_ws_buff_len_mb = cls.max_ws_buff_size / cls.size_1_mb
                         logging.warning(
-                            f"{ws_json_len_mb=:.1f} detected in ws recv, current {max_ws_buff_len_mb=:.1f};;;"
-                            f"First 1024 bytes: {json_str[:1024]=}")
-                    WSReader.handle_json_str(json_str, WSReader.ws_cont_list[idx])
+                            f"{ws_json_len_mb=:.1f} detected in ws recv, current {max_ws_buff_len_mb=:.1f} on "
+                            f"{ws_cont_.uri=};;;First 1024 bytes: {json_str[:1024]=}")
+                    WSReader.handle_json_str(json_str, ws_cont_)
                 else:
                     logging.error(f"dropping {WSReader.ws_cont_list[idx]} - json_str found None")
                     WSReader.ws_cont_list[idx].ws.disconnect()
                     WSReader.ws_cont_list[idx].force_disconnected = True
                     continue
 
-            for ws_cont in WSReader.new_ws_cont_list:
+            for idx, ws_cont in enumerate(WSReader.new_ws_cont_list):
+                if WSReader.shutdown:
+                    # callback not to be called / relied upon once shutdown detected
+                    cls.disconnect_ws_tasks([WSReader.ws_cont_list[idx]])
+                    logging.warning(f"dropping {ws_cont.uri=} of WSReader.new_ws_cont_list, due to {WSReader.shutdown=}"
+                                    f";;;{ws_cont=}")
+                    continue
+                # else not shutdown - proceed as normal
                 WSReader.ws_cont_list.append(ws_cont)
-
                 idx = WSReader.ws_cont_list.index(ws_cont)
 
                 # default max buffer size is: 10MB, pass max_size=value to connect and increase / decrease the default
@@ -221,12 +229,26 @@ class WSReader(WSReaderLite):
                 try:
                     ws_cont.ws = await websockets.connect(ws_cont.uri, ping_timeout=None, max_size=cls.max_ws_buff_size)
                     task = asyncio.create_task(ws_cont.ws.recv(), name=str(idx))
-                except Exception as e:
+                except Exception as exp:
                     logging.exception(f"ws_client exception while connecting/async task submission for {ws_cont.uri=};"
-                                      f" {ws_cont.PydanticClassType=}; exception: {e};;;{ws_cont=}")
+                                      f" {ws_cont.ModelClassType=}; {exp=};;;{ws_cont=}")
                     ws_cont.force_disconnected = True
                 else:
                     pending_tasks.add(task)
                     logging.debug(f"Added new ws in pending list for {ws_cont.uri=}")
                 WSReader.new_ws_cont_list.remove(ws_cont)
         logging.warning(f"WSReader instance going down")
+
+    @classmethod
+    def disconnect_ws_tasks(cls, pending_tasks):
+        if pending_tasks and 0 != len(pending_tasks):
+            disconnected_ws_names: List[str] = []
+            disconnected_ws_desc: List[str] = []
+            for task in pending_tasks:
+                idx = int(task.get_name())
+                WSReader.ws_cont_list[idx].ws.disconnect()
+                disconnected_ws_names.append(f"{idx=}; ")
+                disconnected_ws_desc.append(f"{idx=}-{WSReader.ws_cont_list[idx]=}; ")
+            logging.warning(f"closed web-socket connections gracefully within while loop for: "
+                            f"{[name for name in disconnected_ws_names]};;;"
+                            f"{[desc for desc in disconnected_ws_desc]}")

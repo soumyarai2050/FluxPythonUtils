@@ -10,7 +10,7 @@ import types
 # 3rd party imports
 import orjson
 from pydantic import ConfigDict, BaseModel
-from pendulum import DateTime, parse as pendulum_parse
+from pendulum import DateTime, Date, parse as pendulum_parse
 from bson import ObjectId
 import msgspec
 import os
@@ -165,7 +165,7 @@ def enc_hook(obj: Any) -> Any:
 
 
 class MsgspecBaseModel(msgspec.Struct, kw_only=True):
-    custom_builtin_types = [DateTime, types.FunctionType, Timestamp, datetime.datetime]
+    custom_builtin_types = [DateTime, Date, types.FunctionType, Timestamp, datetime.datetime]
 
     @classmethod
     def from_json_str(cls, json_str: bytes | str, **kwargs):

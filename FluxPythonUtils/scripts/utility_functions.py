@@ -6,6 +6,7 @@ import os
 import logging
 import pickle
 import re
+import sys
 import threading
 from typing import List, Dict, Tuple, Type, Set, Any, Iterable, Final
 import socket
@@ -750,7 +751,7 @@ class YAMLConfigurationManager:
     def load_yaml_configurations(cls, config_file_path: str | None = None,
                                  default_config_file_path: str | None = "configurations.yaml",
                                  load_as_str: bool = False) -> Dict[any, any] | str:
-        # boilerplate debug prints for all project proxy settings, DO NOT DELETE
+        # boilerplate debug prints for all projects proxy settings, DO NOT DELETE
         YAMLConfigurationManager.proxy_setting_boilerplate()
 
         if config_file_path is None:
@@ -1442,6 +1443,36 @@ def get_symbol_side_pattern():
     return "%%"
 
 
+def get_launcher_name():
+    component_path: str = sys.argv[0]
+    # rpartition splits from the right-hand-side of the string
+    component_file_name: str = (component_path.rpartition("/"))[-1]
+    return (component_file_name.split('.'))[0]
+
+
+def extract_core_config_data(config_dict: Dict, inst_id_prefix: str) -> Tuple[bool, str, str]:
+    component_name = get_launcher_name()
+
+    env_type: str | None = config_dict.get("env_type")
+    is_uat: bool | None = True if env_type and env_type.lower() == "uat" else False
+
+    trading_link_int_id: int | None = config_dict.get("trading_link_int_id")
+    if "basket" not in component_name.lower():
+        if is_uat:  # strat executor found UAT mode
+            inst_id: str | None = f"{inst_id_prefix}-UAT-{trading_link_int_id}"  # sample: SIM-UAT-1
+        else:  # strat executor found prod mode
+            inst_id: str | None = f"{inst_id_prefix}-{trading_link_int_id}"  # sample: SIM-1
+    else:
+        if is_uat:  # basket executor found UAT mode
+            inst_id: str | None = f"{inst_id_prefix}B-UAT-{trading_link_int_id}"  # sample: SIMB-UAT-1
+        else:  # basket executor found prod mode
+            inst_id: str | None = f"{inst_id_prefix}B-{trading_link_int_id}"  # sample: SIMB-1
+
+    inst_id: str = inst_id if inst_id else "NO-INST-ID"  # overwritten by Trading Link with strat ID
+
+    return is_uat, inst_id, component_name
+
+
 async def submit_task_with_first_completed_wait(tasks_list: List[asyncio.Task],
                                                 timeout: float = 60.0):
     res_list = []
@@ -1774,7 +1805,7 @@ def is_file_modified(file_path: str, last_modified_time: float | None = None) ->
     if modified_status_from_linux_cmd != modified_status_from_python_os:
         logging.error(f"Incorrect file modified status found for {os.path.basename(file_path)=};;;"
                       f"{modified_status_from_python_os=}, {modified_status_from_linux_cmd=}, "
-                      f"{modified_time_from_python_os}, {modified_time_from_linux_cmd}, {file_path=}")
+                      f"{modified_time_from_python_os=}, {modified_time_from_linux_cmd=}, {file_path=}")
         return True, modified_time_from_python_os
     # modified status is consistent for python os and linux cmd
     return modified_status_from_python_os, modified_time_from_python_os
