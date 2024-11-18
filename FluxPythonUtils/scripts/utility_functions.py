@@ -724,7 +724,6 @@ class YAMLConfigurationManager:
     there if exists already else creates entry in cache
     """
     load_yaml_mutex: threading.Lock = threading.Lock()
-    path_to_content_dict: Dict[str, str] | Dict[str, Dict] = {}
     first: bool = True
 
     @staticmethod
@@ -737,14 +736,12 @@ class YAMLConfigurationManager:
     def _yaml_loader(cls, file_path: str) -> Dict:
         with open(file_path) as f:
             data = yaml.load(f, Loader=YAMLImporter)
-        cls.path_to_content_dict[f"{file_path}_dict"] = data
         return data
 
     @classmethod
     def _str_loader(cls, file_path: str) -> str:
         with open(file_path) as f:
             data = f.read()
-        cls.path_to_content_dict[f"{file_path}_str"] = data
         return data
 
     @classmethod
@@ -756,35 +753,27 @@ class YAMLConfigurationManager:
 
         if config_file_path is None:
             with cls.load_yaml_mutex:
-                if default_config_file_path in cls.path_to_content_dict:
-                    key = default_config_file_path + "_str" if load_as_str else "_dict"
-                    return cls.path_to_content_dict.get(key)
-                else:
-                    if file_exist(default_config_file_path):
-                        if not load_as_str:
-                            return cls._yaml_loader(default_config_file_path)
-                        else:
-                            return cls._str_loader(default_config_file_path)
+                if file_exist(default_config_file_path):
+                    if not load_as_str:
+                        return cls._yaml_loader(default_config_file_path)
                     else:
-                        err_str = f"No {default_config_file_path} exists in this script's directory. " \
-                                  f"Either make one or pass another file's path as parameter;;;"
-                        logging.exception(err_str)
-                        raise Exception(err_str)
+                        return cls._str_loader(default_config_file_path)
+                else:
+                    err_str = f"No {default_config_file_path} exists in this script's directory. " \
+                              f"Either make one or pass another file's path as parameter;;;"
+                    logging.exception(err_str)
+                    raise Exception(err_str)
         else:
             with cls.load_yaml_mutex:
-                if config_file_path in cls.path_to_content_dict:
-                    key = config_file_path + "_str" if load_as_str else "_dict"
-                    return cls.path_to_content_dict.get(key)
-                else:
-                    if file_exist(config_file_path):
-                        if not load_as_str:
-                            return cls._yaml_loader(config_file_path)
-                        else:
-                            return cls._str_loader(config_file_path)
+                if file_exist(config_file_path):
+                    if not load_as_str:
+                        return cls._yaml_loader(config_file_path)
                     else:
-                        err_str = f"No file: {config_file_path} exist"
-                        logging.exception(err_str)
-                        raise FileNotFoundError(err_str)
+                        return cls._str_loader(config_file_path)
+                else:
+                    err_str = f"No file: {config_file_path} exist"
+                    logging.exception(err_str)
+                    raise FileNotFoundError(err_str)
 
     @classmethod
     def update_yaml_configurations(cls, yaml_content: Dict | str, config_file_path: str | None = None,
