@@ -64,6 +64,16 @@ class EmptyFileError(Exception):
         super().__init__(f"{self.message}, file_path: {self.file_path}")
 
 
+class ClientError(Exception):
+    """Exception raised for unexpected client error.
+        Attributes:
+            message -- brief explanation of the error
+        """
+
+    def __init__(self, message: str):
+        super().__init__(message)
+
+
 class ServiceUnavailable(Exception):
     """Exception raised to represent service unavailability.
 
@@ -95,7 +105,7 @@ def log_n_except(original_function):
             # logging.exception(f"{err_str:.1048576}")
             # raise Exception(f"{err_str:.1048576}")
             logging.exception(f"{err_str:.1000}")
-            raise Exception(f"{err_str:.1000}")
+            raise ClientError(f"{err_str:.1000}")
 
     return wrapper_function
 

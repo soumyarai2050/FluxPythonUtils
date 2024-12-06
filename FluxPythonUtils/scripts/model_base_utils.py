@@ -9,6 +9,7 @@ import types
 
 # 3rd party imports
 import orjson
+import pendulum
 from pydantic import ConfigDict, BaseModel
 from pendulum import DateTime, Date, parse as pendulum_parse
 from bson import ObjectId
@@ -104,7 +105,7 @@ class BareCamelBaseModel(BareBaseModel, CamelBaseModel):
 
 class PydanticBaseModel(BaseModel):
     @classmethod
-    def from_json_str(cls, json_data: bytes | str):
+    def from_json_bytes(cls, json_data: bytes | str):
         json_data_dict = orjson.loads(json_data)
         return cls(**json_data_dict)
 
@@ -127,7 +128,7 @@ class PydanticBaseModel(BaseModel):
 class DataclassBaseModel:
 
     @classmethod
-    def from_json_str(cls, json_data: bytes | str):
+    def from_json_bytes(cls, json_data: bytes | str):
         json_data_dict = orjson.loads(json_data)
         return cls(**json_data_dict)
 
@@ -146,45 +147,45 @@ class DataclassBaseModel:
         return orjson.dumps(self, default=str)
 
 
-def dec_hook(type: Type, obj: Any) -> Any:
-    if type == DateTime and isinstance(obj, str):
-        return pendulum_parse(obj)
-    elif type == DateTime and isinstance(obj, DateTime):
-        return obj
-    elif type == DateTime and isinstance(obj, datetime.datetime):
-        return pendulum_parse(str(obj))
-
-
-def enc_hook(obj: Any) -> Any:
-    if isinstance(obj, DateTime):
-        return obj.isoformat()
-    elif isinstance(obj, datetime.datetime):
-        return obj.isoformat()
-    elif isinstance(obj, Timestamp):
-        return obj.isoformat()
-
-
 class MsgspecBaseModel(msgspec.Struct, kw_only=True):
     custom_builtin_types = [DateTime, Date, types.FunctionType, Timestamp, datetime.datetime]
 
     @classmethod
-    def from_json_str(cls, json_str: bytes | str, **kwargs):
+    def dec_hook(cls, type: Type, obj: Any) -> Any:
+        if type == DateTime and isinstance(obj, str):
+            return pendulum_parse(obj)
+        elif type == DateTime and isinstance(obj, DateTime):
+            return obj
+        elif type == DateTime and isinstance(obj, datetime.datetime):
+            return pendulum_parse(str(obj))
+
+    @classmethod
+    def enc_hook(cls, obj: Any) -> Any:
+        if isinstance(obj, DateTime):
+            return obj.isoformat()
+        elif isinstance(obj, datetime.datetime):
+            return obj.isoformat()
+        elif isinstance(obj, Timestamp):
+            return obj.isoformat()
+
+    @classmethod
+    def from_json_bytes(cls, json_str: bytes | str, **kwargs):
         strict = kwargs.pop("strict", True)
-        return msgspec.json.decode(json_str, type=cls, dec_hook=dec_hook, strict=strict)
+        return msgspec.json.decode(json_str, type=cls, dec_hook=cls.dec_hook, strict=strict)
 
     @classmethod
     def from_dict(cls, args_dict: Dict, **kwargs):
         strict = kwargs.pop("strict", True)
-        return msgspec.convert(args_dict, type=cls, dec_hook=dec_hook, strict=strict)
+        return msgspec.convert(args_dict, type=cls, dec_hook=cls.dec_hook, strict=strict)
 
     @classmethod
     def from_dict_list(cls, args_dict_list: List[Dict], **kwargs):
         strict = kwargs.pop("strict", True)
-        return msgspec.convert(args_dict_list, type=List[cls], dec_hook=dec_hook, strict=strict)
+        return msgspec.convert(args_dict_list, type=List[cls], dec_hook=cls.dec_hook, strict=strict)
 
     @classmethod
     def from_kwargs(cls, **kwargs):
-        return msgspec.convert(kwargs, type=cls, dec_hook=dec_hook)
+        return msgspec.convert(kwargs, type=cls, dec_hook=cls.dec_hook)
 
     def to_dict(self, **kwargs) -> Dict:
         exclude_none = kwargs.get("exclude_none", False)
@@ -198,13 +199,13 @@ class MsgspecBaseModel(msgspec.Struct, kw_only=True):
         Converts obj to jsonable dict which converts datetime obj to str
         """
         exclude_none = kwargs.get("exclude_none", False)
-        return_val = msgspec.to_builtins(self, enc_hook=enc_hook)
+        return_val = msgspec.to_builtins(self, enc_hook=self.enc_hook)
         if exclude_none:
             return_val = remove_none_values(return_val)
         return return_val
 
     def to_json_str(self, **kwargs) -> str | bytes:
-        return msgspec.json.encode(self, enc_hook=enc_hook)
+        return msgspec.json.encode(self, enc_hook=self.enc_hook)
 
 
 class IncrementalIdBaseModel(PydanticBaseModel):
@@ -440,8 +441,26 @@ class ListModelMsgspec(msgspec.Struct, kw_only=True):
     root: List[Any]      # name root is used to make it consistent as pydantic impl
 
     @classmethod
-    def from_json_str(cls, json_str: bytes | str) -> 'ListModelMsgspec':
-        obj_list = msgspec.json.decode(json_str, type=cls.__annotations__['root'], dec_hook=dec_hook)
+    def dec_hook(cls, type: Type, obj: Any) -> Any:
+        if type == DateTime and isinstance(obj, str):
+            return pendulum_parse(obj)
+        elif type == DateTime and isinstance(obj, DateTime):
+            return obj
+        elif type == DateTime and isinstance(obj, datetime.datetime):
+            return pendulum_parse(str(obj))
+
+    @classmethod
+    def enc_hook(cls, obj: Any) -> Any:
+        if isinstance(obj, DateTime):
+            return obj.isoformat()
+        elif isinstance(obj, datetime.datetime):
+            return obj.isoformat()
+        elif isinstance(obj, Timestamp):
+            return obj.isoformat()
+
+    @classmethod
+    def from_json_bytes(cls, json_str: bytes | str) -> 'ListModelMsgspec':
+        obj_list = msgspec.json.decode(json_str, type=cls.__annotations__['root'], dec_hook=cls.dec_hook)
         return cls(root=obj_list)
 
 
@@ -450,7 +469,7 @@ class ListModelBase:
     root: List[Any]      # name root is used to make it consistent as pydantic impl
 
     @classmethod
-    def from_json_str(cls, json_str: bytes | str) -> 'ListModelBase':
+    def from_json_bytes(cls, json_str: bytes | str) -> 'ListModelBase':
         json_data_dict = orjson.loads(json_str)
         return cls(root=json_data_dict)
 

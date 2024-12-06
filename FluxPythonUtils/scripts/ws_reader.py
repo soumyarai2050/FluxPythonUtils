@@ -72,7 +72,7 @@ class WSReader(WSReaderLite):
     def read_model_obj_list(json_data: str, ModelClassListType):
         try:
             # how do we safely & efficiently test if JSON data is of type list, to avoid except & return None instead?
-            model_obj_list = ModelClassListType.from_json_str(json_data)
+            model_obj_list = ModelClassListType.from_json_bytes(json_data)
             return model_obj_list
         except Exception as e:
             logging.exception(f"list type: {ModelClassListType} json decode failed;;;json_data: {json_data}, "
@@ -82,7 +82,7 @@ class WSReader(WSReaderLite):
     @staticmethod
     def read_model_obj(json_data: str, ModelClassType):
         try:
-            model_obj = ModelClassType.from_json_str(json_data)
+            model_obj = ModelClassType.from_json_bytes(json_data)
             return model_obj
         except Exception as e:
             logging.exception(f"{ModelClassType.__name__} json decode failed;;;"
