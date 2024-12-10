@@ -39,6 +39,7 @@ from fastapi import WebSocket
 from fastapi import HTTPException
 import orjson
 import pendulum
+import moviepy
 
 # FluxPythonUtils Modules
 from FluxPythonUtils.scripts.yaml_importer import YAMLImporter
@@ -1513,7 +1514,7 @@ def except_n_log_alert():
     return decorator_function
 
 
-def find_free_port():
+def find_free_port() -> int:
     with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
         s.bind(('', 0))
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -1878,6 +1879,18 @@ def convert_pendulum_to_datetime(pendulum_dt_obj: DateTime):
                             pendulum_dt_obj.hour, pendulum_dt_obj.minute, pendulum_dt_obj.second,
                             pendulum_dt_obj.microsecond, pendulum_dt_obj.tzinfo)
     return datetime_obj
+
+
+def convert_video_to_audio(video_file_path: str | PurePath, audio_file_path: str | PurePath):
+    """
+    Converts video file to audio file
+    :param video_file_path: video file path to be converted to audio
+    :param audio_file_path: generated audio file path
+    :return:
+    """
+    video = moviepy.VideoFileClip(video_file_path)
+    audio = video.audio
+    audio.write_audiofile(audio_file_path)
 
 
 if __name__ == "__main__":
