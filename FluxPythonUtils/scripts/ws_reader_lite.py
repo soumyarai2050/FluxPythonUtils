@@ -41,7 +41,7 @@ class WSReaderLite:
             callback(model_obj)
         except Exception as e:
             logging.exception(f"dropping this update - ws invoked callback threw exception;;;"
-                              f"PydanticObj: {model_obj}, Exception {e}")
+                              f"ModelObj: {model_obj}, Exception {e}")
 
     @staticmethod
     def handle_json_str(json_str: str, ws_cont):

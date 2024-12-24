@@ -301,9 +301,9 @@ def dec_hook(type: Type, obj: Any) -> Any:
         return pendulum.parse(str(obj))
 
 
-def pandas_df_to_pydantic_obj_list(read_df, MsgspecType: Type[MsgspecBaseModel],
-                                   rename_col_names_to_snake_case: bool = False,
-                                   rename_col_names_to_lower_case: bool = True):
+def pandas_df_to_model_obj_list(read_df, MsgspecType: Type[MsgspecBaseModel],
+                                rename_col_names_to_snake_case: bool = False,
+                                rename_col_names_to_lower_case: bool = True):
 
     if rename_col_names_to_snake_case:
         # replace any space in col name with _ and convert name to snake_case
@@ -332,7 +332,7 @@ def dict_or_list_records_csv_reader(file_name: str, MsgspecType: Type[MsgspecBas
                                     rename_col_names_to_lower_case: bool = True,
                                     no_throw: bool = False) -> List[MsgspecBaseModel]:
     """
-    At this time the method only supports list of pydantic_type extraction form csv
+    At this time the method only supports list of msgspec_type extraction form csv
     """
     if data_dir is None:
         data_dir = PurePath(__file__).parent / "data"
@@ -342,8 +342,8 @@ def dict_or_list_records_csv_reader(file_name: str, MsgspecType: Type[MsgspecBas
     str_csv_path = str(csv_path)
     if os.path.exists(str_csv_path) and os.path.getsize(str_csv_path) > 0:
         read_df = pd.read_csv(csv_path, keep_default_na=False)
-        return pandas_df_to_pydantic_obj_list(read_df, MsgspecType, rename_col_names_to_snake_case,
-                                              rename_col_names_to_lower_case)
+        return pandas_df_to_model_obj_list(read_df, MsgspecType, rename_col_names_to_snake_case,
+                                           rename_col_names_to_lower_case)
     elif not no_throw:
         raise Exception(f"dict_or_list_records_csv_reader invoked on empty or no csv file: {str(csv_path)}")
     return []
@@ -356,11 +356,11 @@ def str_from_file(file_path: str) -> str:
 
 def get_json_array_as_msgspec_dict(json_key: str, json_data_list, MsgspecType: Type[MsgspecBaseModel]
                                    ) -> Dict[str, msgspec.Struct]:
-    pydantic_dict: Dict[str, msgspec.Struct] = dict()
+    msgspec_dict: Dict[str, msgspec.Struct] = dict()
     for json_data in json_data_list:
-        pydantic_key = json_data[json_key]
-        pydantic_dict[pydantic_key] = MsgspecType.from_kwargs(**json_data)
-    return pydantic_dict
+        msgspec_key = json_data[json_key]
+        msgspec_dict[msgspec_key] = MsgspecType.from_kwargs(**json_data)
+    return msgspec_dict
 
 
 def store_json_or_dict_to_file(file_name: str, json_dict, data_dir: PurePath | None = None):
@@ -1367,7 +1367,7 @@ def get_native_host_n_port_from_config_dict(config_dict: Dict) -> Tuple[str, int
 
 async def execute_tasks_list_with_all_completed(
         tasks_list: List[asyncio.Task],
-        pydantic_class_type: Type[DocType] | Type[dataclass] | Type[MsgspecBaseModel] | None = None,
+        model_class_type: Type[DocType] | Type[dataclass] | Type[MsgspecBaseModel] | None = None,
         timeout: float = 20.0):
     pending_tasks: Set[asyncio.Task] | None = None
     completed_tasks: Set[asyncio.Task] | None = None
@@ -1380,8 +1380,8 @@ async def execute_tasks_list_with_all_completed(
             logging.exception(f"await asyncio.wait raised exception: {e}")
     else:
         debug_str = "unexpected: Called execute_tasks_list_with_all_completed with empty tasks_list"
-        if pydantic_class_type is not None:
-            debug_str += f" for model: {pydantic_class_type.__name__}"
+        if model_class_type is not None:
+            debug_str += f" for model: {model_class_type.__name__}"
         logging.debug(debug_str)
 
     if not completed_tasks:
@@ -1407,7 +1407,7 @@ async def execute_tasks_list_with_all_completed(
 
 
 async def execute_tasks_list_with_first_completed(tasks_list: List[asyncio.Task],
-                                                  pydantic_class_type: Type[DocType],
+                                                  model_class_type: Type[DocType],
                                                   timeout: float = 20.0):
     pending_tasks: Set[asyncio.Task] = set(tasks_list)
     completed_tasks: Set[asyncio.Task] | None = None
@@ -1417,7 +1417,7 @@ async def execute_tasks_list_with_first_completed(tasks_list: List[asyncio.Task]
             completed_tasks, pending_tasks = await asyncio.wait(pending_tasks, return_when=asyncio.FIRST_COMPLETED,
                                                                 timeout=timeout)
         except Exception as e:
-            logging.exception(f"for model: {pydantic_class_type.__name__} await asyncio.wait raised exception: {e}")
+            logging.exception(f"for model: {model_class_type.__name__} await asyncio.wait raised exception: {e}")
 
         # completed_tasks will be set of tasks or empty set or None
         while completed_tasks:

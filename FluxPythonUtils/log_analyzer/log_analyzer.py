@@ -146,6 +146,7 @@ class LogAnalyzer(ABC):
                     f"tail executor start{LogAnalyzer.log_seperator}{pattern_matched_added_file_path_to_service_dict=}")
             else:
                 pattern_matched_added_file_path_to_service_dict.pop(log_file_path)
+                logging.debug(f"Removed cache for {log_file_path=}")
 
     @staticmethod
     def file_watcher_cache_key(log_detail: LogDetail):
@@ -209,6 +210,9 @@ class LogAnalyzer(ABC):
                                                                             non_existing_log_details)
                                 # avoids any pattern matched file in regex case to get started again
                                 tail_executor_started_files_cache_dict[log_detail.log_file_path] = [log_detail.service]
+                                logging.debug(f"Creating static file path cache entry "
+                                              f"for {log_detail.log_file_path=} with "
+                                              f"{log_detail.service=}")
                             else:
                                 log_detail_service_list: List[str] = (
                                     tail_executor_started_files_cache_dict.get(log_detail.log_file_path))
@@ -218,6 +222,9 @@ class LogAnalyzer(ABC):
                                     # avoids any pattern matched file in regex case to get started again
                                     tail_executor_started_files_cache_dict[log_detail.log_file_path].append(
                                         log_detail.service)
+                                    logging.debug(f"Adding static file path cache entry "
+                                                  f"in {log_detail.log_file_path=} for "
+                                                  f"{log_detail.service=}")
                                 # else not required: avoiding duplicate tail executor
                     else:
                         pattern_matched_file_paths = glob.glob(log_detail.log_file_path)
@@ -227,7 +234,11 @@ class LogAnalyzer(ABC):
                                 LogAnalyzer._handle_log_file_path_is_regex(log_detail_type, log_details_queue,
                                                                            log_detail, pattern_matched_file_path)
                                 tail_executor_started_files_cache_dict[pattern_matched_file_path] = [log_detail.service]
+                                logging.debug(f"Creating dynamic file path cache entry "
+                                              f"for {pattern_matched_file_path=} with "
+                                              f"{log_detail.service=}")
                             else:
+                                # handling multiple service for same log file
                                 log_detail_service_list: List[str] = (
                                     tail_executor_started_files_cache_dict.get(pattern_matched_file_path))
                                 if log_detail.service not in log_detail_service_list:
@@ -235,6 +246,9 @@ class LogAnalyzer(ABC):
                                                                                log_detail, pattern_matched_file_path)
                                     tail_executor_started_files_cache_dict[pattern_matched_file_path].append(
                                         log_detail.service)
+                                    logging.debug(f"Adding dynamic file path cache entry "
+                                                  f"in {pattern_matched_file_path=} for "
+                                                  f"{log_detail.service=}")
                                 # else not required: avoiding duplicate tail executor
                 time.sleep(0.5)     # delay for while loop
         except Exception as e:
