@@ -16,6 +16,7 @@ from pathlib import PurePath
 import multiprocessing
 from filelock import FileLock
 import inspect
+from datetime import timedelta
 
 # 3rd part imports
 from pendulum import DateTime
@@ -29,6 +30,7 @@ from FluxPythonUtils.scripts.utility_functions import (
 from Flux.PyCodeGenEngine.FluxCodeGenCore.perf_benchmark_decorators import (get_timeit_pattern,
                                                                             get_timeit_field_separator)
 from FluxPythonUtils.scripts.model_base_utils import MsgspecBaseModel
+from FluxPythonUtils.log_analyzer.log_analyzer_shm import LogAnalyzerSHM
 
 
 def get_transaction_counts_n_timeout_from_config(config_yaml_dict: Dict | None,
@@ -61,10 +63,10 @@ class LogDetail(MsgspecBaseModel, kw_only=True):
     log_prefix_regex_pattern_to_log_source_patter_n_line_num_regex_pattern: Dict[str, str] | None = None
     log_file_path_is_regex: bool = False
     process: subprocess.Popen | None = None
+    tail_executor_process: multiprocessing.context.SpawnProcess | None = None
     poll_timeout: float = 60.0   # seconds
     processed_timestamp: str | None = None
     data_snapshot_version: float | None = None
-    last_processed_utc_datetime: DateTime = DateTime.utcnow()
 
 
 class LogAnalyzer(ABC):
@@ -108,6 +110,7 @@ class LogAnalyzer(ABC):
         self.log_details_queue: queue.Queue = queue.Queue()
         self.log_detail = log_detail
         self.component_file_path = log_detail.log_file_path
+        self.log_analyzer_shm = LogAnalyzerSHM(self.get_process_name(log_detail))
 
         # running refresh_regex_list thread
         refresh_regex_list_thread = Thread(target=self.refresh_regex_list, daemon=True)
@@ -154,12 +157,10 @@ class LogAnalyzer(ABC):
         return f"{log_detail.service}~{file_name.split('.')[0]}"
 
     @staticmethod
-    def _handle_log_file_path_not_regex(log_details_queue: queue.Queue, log_detail: LogDetail,
-                                        non_existing_log_details: List[LogDetail]) -> None:
+    def _handle_log_file_path_not_regex(log_details_queue: queue.Queue, log_detail: LogDetail) -> None:
         log_details_queue.put(log_detail)
         logging.info(f"putting log detail with {log_detail.log_file_path=} to init tail executor")
 
-        non_existing_log_details.remove(log_detail)
 
     @staticmethod
     def _handle_log_file_path_is_regex(log_detail_type: Type[LogDetail], log_details_queue: queue.Queue,
@@ -182,8 +183,6 @@ class LogAnalyzer(ABC):
         #           started with -f which starts tail when new file with same name is created - only side effect
         #           is non-activity alerts will keep on generating
 
-        non_existing_log_details: List[LogDetail] = []
-
         # contains {"file_path": ["log_detail1", "log_detail2", ...]}
         # used to check if file has already running tail_executor with this log_detail - avoids duplicate tail_executor
         tail_executor_started_files_cache_dict: Dict[str, List[str]] = {}
@@ -193,21 +192,15 @@ class LogAnalyzer(ABC):
                                                                      tail_executor_started_files_cache_dict,),
                daemon=True).start()
 
-        # adding all log_details to non_existing_log_details list and keep removing those found
-        # existing dynamically
-        for log_detail in log_details:
-            non_existing_log_details.append(log_detail)
-
         try:
             # pattern matched added files
             while True:
-                for log_detail in non_existing_log_details:
+                for log_detail in log_details:
                     if not log_detail.log_file_path_is_regex:
                         if os.path.exists(log_detail.log_file_path):
 
                             if log_detail.log_file_path not in tail_executor_started_files_cache_dict:
-                                LogAnalyzer._handle_log_file_path_not_regex(log_details_queue, log_detail,
-                                                                            non_existing_log_details)
+                                LogAnalyzer._handle_log_file_path_not_regex(log_details_queue, log_detail)
                                 # avoids any pattern matched file in regex case to get started again
                                 tail_executor_started_files_cache_dict[log_detail.log_file_path] = [log_detail.service]
                                 logging.debug(f"Creating static file path cache entry "
@@ -217,8 +210,7 @@ class LogAnalyzer(ABC):
                                 log_detail_service_list: List[str] = (
                                     tail_executor_started_files_cache_dict.get(log_detail.log_file_path))
                                 if log_detail.service not in log_detail_service_list:
-                                    LogAnalyzer._handle_log_file_path_not_regex(log_details_queue, log_detail,
-                                                                                non_existing_log_details)
+                                    LogAnalyzer._handle_log_file_path_not_regex(log_details_queue, log_detail)
                                     # avoids any pattern matched file in regex case to get started again
                                     tail_executor_started_files_cache_dict[log_detail.log_file_path].append(
                                         log_detail.service)
@@ -262,7 +254,7 @@ class LogAnalyzer(ABC):
     def run_tail_executor(cls, log_detail, **kwargs):
         # changing process name
         p_name = multiprocessing.current_process().name
-        setproctitle.setproctitle(p_name)
+        setproctitle.setproctitle(p_name)   # renames process
 
         log_analyzer_obj = cls(log_detail, **kwargs)
         log_analyzer_obj.listen()
@@ -275,11 +267,10 @@ class LogAnalyzer(ABC):
     @classmethod
     def dynamic_start_log_analyzer_for_log_details(
             cls, log_details_queue: multiprocessing.Queue,
-            file_path_to_process_cache_lock: Lock,
-            file_path_to_process_cache_dict: Dict[str, List[multiprocessing.Process]],
             file_path_to_log_detail_cache_lock: Lock,
             file_path_to_log_detail_cache_dict: Dict[str, List[LogDetail]],
-            spawn, start_datetime_fmt_str: str, **kwargs):
+            spawn: multiprocessing.context.SpawnContext, start_datetime_fmt_str: str,
+            file_path_to_log_analyzer_shm_obj_dict: Dict[str, LogAnalyzerSHM], **kwargs):
         while True:
             log_detail: LogDetail = log_details_queue.get()  # blocking call
 
@@ -294,19 +285,17 @@ class LogAnalyzer(ABC):
             # start time
             if log_detail.processed_timestamp is None:
                 log_detail.processed_timestamp = start_datetime_fmt_str
+                # creating shm for this file before starting tail executor
+                log_analyzer_shm = LogAnalyzerSHM(process_name, create=True)
+                log_analyzer_shm.set(start_datetime_fmt_str)    # setting start timestamp
+                file_path_to_log_analyzer_shm_obj_dict[log_detail.log_file_path] = log_analyzer_shm
             # else not required: taking value of processed_timestamp to restart set before passing log_detail to restart
 
-            process = spawn.Process(target=cls.run_tail_executor, args=(log_detail,),
-                                    kwargs=kwargs, daemon=True, name=process_name)
-            process.start()
+            spawn_process = spawn.Process(target=cls.run_tail_executor, args=(log_detail,),
+                                          kwargs=kwargs, daemon=True, name=process_name)
+            spawn_process.start()
             logging.info(f"started tail executor for {log_detail.log_file_path}")
-
-            with file_path_to_process_cache_lock:
-                process_list = file_path_to_process_cache_dict.get(log_detail.log_file_path)
-                if process_list is None:
-                    file_path_to_process_cache_dict[log_detail.log_file_path] = [process]
-                else:
-                    process_list.append(process)
+            log_detail.tail_executor_process = spawn_process
 
             with file_path_to_log_detail_cache_lock:
                 log_detail_list = file_path_to_log_detail_cache_dict.get(log_detail.log_file_path)
@@ -334,20 +323,20 @@ class LogAnalyzer(ABC):
             regex_list_refresh_time_wait = 30
         while True:
             regex_list_updated: bool = False
-            with FileLock(self.regex_lock_file):
-                if os.path.exists(self.regex_file):
-                    is_modified, modified_time = is_file_modified(self.regex_file, self.regex_file_data_snapshot_version)
-                    if is_modified:
+            if os.path.exists(self.regex_file):
+                is_modified, modified_time = is_file_modified(self.regex_file, self.regex_file_data_snapshot_version)
+                if is_modified:
+                    with FileLock(self.regex_lock_file):
                         # regex file updated. loading regex list
                         self._load_regex_list()
                         self.regex_file_data_snapshot_version = modified_time
                         regex_list_updated = True
-                    # else not required, regex file not updated. returning False
-                elif len(self.regex_list) != 0:
-                    # regex file is deleted while script execution
-                    self.regex_list = []
-                    regex_list_updated = True
-                # else not required if both regex file is not present and regex list is empty. returning False
+                # else not required, regex file not updated. returning False
+            elif len(self.regex_list) != 0:
+                # regex file is deleted while script execution
+                self.regex_list = []
+                regex_list_updated = True
+            # else not required if both regex file is not present and regex list is empty
             if regex_list_updated:
                 logging.info(f"suppress alert regex list updated. regex_list: {self.regex_list}")
             time.sleep(regex_list_refresh_time_wait)
@@ -457,6 +446,7 @@ class LogAnalyzer(ABC):
                 if match:
                     timestamp = match.group(0)
                     log_detail.processed_timestamp = timestamp
+                    self.log_analyzer_shm.set(timestamp)
 
                 if line.startswith("tail:"):
                     if "giving up on this name" in line:
@@ -559,9 +549,6 @@ class LogAnalyzer(ABC):
                         match_callable(log_prefix, log_message, log_detail,
                                        log_date_time, log_source_file_name, line_num)
 
-                    # updating last_processed_utc_datetime for this log_detail
-                    log_detail.last_processed_utc_datetime = DateTime.utcnow()
-
             except queue.Empty:
                 logging.info(f"No Data found for last {log_detail.poll_timeout} secs in _analyze_log")
             except Exception as e:
@@ -632,6 +619,11 @@ class LogAnalyzer(ABC):
                 logging.exception(err_str_)
 
         return log_prefix, log_message, log_date_time, source_file_name, line_num
+
+    @staticmethod
+    def _get_restart_datetime_from_log_detail(last_processed_utc_datetime: DateTime):
+        restart_datetime: str = last_processed_utc_datetime.format("YYYY-MM-DD HH:mm:ss,SSS")
+        return restart_datetime
 
     @abstractmethod
     def notify_no_activity(self, log_detail: LogDetail):

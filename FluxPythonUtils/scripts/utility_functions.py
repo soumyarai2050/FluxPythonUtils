@@ -8,10 +8,10 @@ import pickle
 import re
 import sys
 import threading
-from typing import List, Dict, Tuple, Type, Set, Any, Iterable, Final
+from typing import List, Dict, Tuple, Type, Set, Any, Iterable, Final, Optional
 import socket
 from contextlib import closing
-
+import multiprocessing
 import msgspec
 import pandas
 import pexpect
@@ -40,6 +40,7 @@ from fastapi import HTTPException
 import orjson
 import pendulum
 import moviepy
+import polars as pl
 
 # FluxPythonUtils Modules
 from FluxPythonUtils.scripts.yaml_importer import YAMLImporter
@@ -172,6 +173,21 @@ def http_response_as_class_type(url, response, expected_status_code, msgspec_typ
                 return [msgspec_type.from_dict(response_obj) for response_obj in response_json]
             else:
                 return msgspec_type.from_dict(response_json)
+    else:
+        raise Exception(f"failed for url: {url}, http_request_type: {str(http_request_type)} "
+                        f"http_error: {response_json}, status_code: {status_code}")
+
+
+def http_response_as_df(url, response, expected_status_code, http_request_type: HTTPRequestType):
+    status_code, response_json = handle_http_response(response)
+    if status_code == expected_status_code:
+        if isinstance(response_json, bool):
+            return response_json
+        else:
+            if isinstance(response_json, list):
+                return pl.DataFrame(response_json)
+            else:
+                raise Exception(f"Unsupported response type: {type(response_json)} for converting to polars dataframe")
     else:
         raise Exception(f"failed for url: {url}, http_request_type: {str(http_request_type)} "
                         f"http_error: {response_json}, status_code: {status_code}")
@@ -1668,23 +1684,7 @@ def convert_pattern_for_awk_match(pattern_str: str) -> str:
     return pattern_str
 
 
-def get_log_line_no_from_timestamp(log_file_path: str, timestamp: str) -> str | None:
-    if not os.path.exists(log_file_path):
-        return None
-
-    grep_timestamp_pattern: str = timestamp
-    timestamp_pattern_list: List[str] = [grep_timestamp_pattern]
-    while True:
-        # generate patterns for time only
-        last_timestamp_char: str = grep_timestamp_pattern[-1]
-        if last_timestamp_char == " " or last_timestamp_char == "-":
-            break
-        if last_timestamp_char == ":" or last_timestamp_char == ",":
-            grep_timestamp_pattern = grep_timestamp_pattern[:-2]
-        else:
-            grep_timestamp_pattern = grep_timestamp_pattern[:-1]
-        timestamp_pattern_list.append(grep_timestamp_pattern)
-
+def _get_log_line_no_from_timestamp_grep_cmd(log_file_path: str, timestamp_pattern_list: List[str], timestamp: str):
     grep_cmd_list: List[str] = [f"grep -n '^{timestamp_pattern}' {log_file_path}" for timestamp_pattern
                                 in timestamp_pattern_list]
     cmd: str = f"({' || '.join(grep_cmd_list)}) | head -n 1"
@@ -1698,6 +1698,39 @@ def get_log_line_no_from_timestamp(log_file_path: str, timestamp: str) -> str | 
         return None
     if output:
         closest_line_no: str = output.split(":")[0]
+        return closest_line_no
+    # else return None in all other case
+    return None
+
+
+def get_log_line_no_from_timestamp(log_file_path: str, timestamp: str) -> str | None:
+    if not os.path.exists(log_file_path):
+        return None
+
+    # if exact datetime is found - taking next line from it else taking best match
+    grep_timestamp_pattern: str = timestamp
+    timestamp_pattern_list: List[str] = [grep_timestamp_pattern]
+
+    exact_line_num = _get_log_line_no_from_timestamp_grep_cmd(log_file_path, timestamp_pattern_list, timestamp)
+    if exact_line_num is not None:
+        return f"+{parse_to_int(exact_line_num)+1}"
+    # else not required: if exact line is not found - finding the best match
+
+    timestamp_pattern_list: List[str] = []
+    while True:
+        # generate patterns for time only
+        last_timestamp_char: str = grep_timestamp_pattern[-1]
+        if last_timestamp_char == " " or last_timestamp_char == "-":
+            break
+        if last_timestamp_char == ":" or last_timestamp_char == ",":
+            grep_timestamp_pattern = grep_timestamp_pattern[:-2]
+        else:
+            grep_timestamp_pattern = grep_timestamp_pattern[:-1]
+        timestamp_pattern_list.append(grep_timestamp_pattern)
+
+    # returning best match for timestamp - returns None if no match found
+    closest_line_no = _get_log_line_no_from_timestamp_grep_cmd(log_file_path, timestamp_pattern_list, timestamp)
+    if closest_line_no is not None:
         return f"+{closest_line_no}"
     # else return None in all other case
     return None
