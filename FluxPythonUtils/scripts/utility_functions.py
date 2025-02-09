@@ -56,7 +56,7 @@ from FluxPythonUtils.scripts.model_base_utils import MsgspecBaseModel
 class EmptyFileError(Exception):
     """Exception raised for unexpected empty file.
     Attributes:
-        file_path -- file path that was found with empty file
+        file_or_dir_path -- file path that was found with empty file
         message -- brief explanation of the error (file path passed is auto-appended f-str below)
     """
 
@@ -80,7 +80,7 @@ class ServiceUnavailable(Exception):
     """Exception raised to represent service unavailability.
 
     Attributes:
-        file_path -- file path that was found with empty file
+        file_or_dir_path -- file path that was found with empty file
         message -- brief explanation of the error (file path passed is auto-appended f-str below)
     """
 
@@ -88,6 +88,33 @@ class ServiceUnavailable(Exception):
         self.file_path = file_path
         self.message = message
         super().__init__(f"{self.message}, file_path: {self.file_path}")
+
+
+class ThreadSafeAsyncLock:
+    """
+    # Critical section for asyncio coroutine
+        async with thread_safe_async_lock:
+
+    # Critical section for threads
+        with thread_safe_async_lock:
+    """
+    def __init__(self):
+        self._thread_lock = threading.Lock()
+        self._async_lock = asyncio.Lock()
+
+    async def __aenter__(self):
+        await self._async_lock.acquire()
+        self._thread_lock.acquire()
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        self._thread_lock.release()
+        self._async_lock.release()
+
+    def __enter__(self):
+        self._thread_lock.acquire()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._thread_lock.release()
 
 
 def log_n_except(original_function):
@@ -188,6 +215,15 @@ def http_response_as_df(url, response, expected_status_code, http_request_type: 
                 return pl.DataFrame(response_json)
             else:
                 raise Exception(f"Unsupported response type: {type(response_json)} for converting to polars dataframe")
+    else:
+        raise Exception(f"failed for url: {url}, http_request_type: {str(http_request_type)} "
+                        f"http_error: {response_json}, status_code: {status_code}")
+
+
+def http_response_as_json(url, response, expected_status_code, http_request_type: HTTPRequestType):
+    status_code, response_json = handle_http_response(response)
+    if status_code == expected_status_code:
+        return response_json
     else:
         raise Exception(f"failed for url: {url}, http_request_type: {str(http_request_type)} "
                         f"http_error: {response_json}, status_code: {status_code}")
@@ -1912,6 +1948,13 @@ def convert_pendulum_to_datetime(pendulum_dt_obj: DateTime):
                             pendulum_dt_obj.hour, pendulum_dt_obj.minute, pendulum_dt_obj.second,
                             pendulum_dt_obj.microsecond, pendulum_dt_obj.tzinfo)
     return datetime_obj
+
+
+def get_decimal_places(value: int | float) -> int:
+    value_str = str(value)
+    if "." in value_str:
+        return len(value_str.split(".")[1])
+    return 0  # no decimal places
 
 
 def convert_video_to_audio(video_file_path: str | PurePath, audio_file_path: str | PurePath):

@@ -15,12 +15,6 @@ from FluxPythonUtils.scripts.ws_reader_lite import WSReaderLite
 
 class WSReader(WSReaderLite):
     shutdown: ClassVar[bool] = True
-    size_1_mb: Final[int] = 2 ** 20
-    size_16_mb: Final[int] = size_1_mb * 16
-    size_8_mb: Final[int] = size_1_mb * 8
-    size_10_mb: Final[int] = size_1_mb * 10
-    no_warn_size_mb: Final[int] = size_8_mb
-    max_ws_buff_size: ClassVar[int] = size_16_mb
 
     @classmethod
     def start(cls):
@@ -123,8 +117,12 @@ class WSReader(WSReaderLite):
             try:
                 # default max buffer size is: 10MB, pass max_size=value to connect and increase / decrease the default
                 # size, for eg: max_size=2**24 to change the limit to 16 MB
-                ws_cont.ws = await websockets.connect(ws_cont.uri, ping_timeout=None, max_size=cls.max_ws_buff_size)
+                ws_cont.ws = await websockets.connect(ws_cont.uri, ping_timeout=None,
+                                                      max_size=WSReaderLite.max_ws_buff_size)
                 task = asyncio.create_task(ws_cont.ws.recv(), name=str(idx))
+            except websockets.exceptions.InvalidURI:
+                logging.error(f"ws_client error invalid URI: {ws_cont.uri}")
+                ws_cont.force_disconnected = True
             except Exception as exp:
                 logging.exception(f"ws_client error while connecting/async task submission ws_cont: {ws_cont}, "
                                   f"exception: {exp}")
@@ -140,14 +138,14 @@ class WSReader(WSReaderLite):
                 completed_tasks, pending_tasks = await asyncio.wait(pending_tasks, return_when=asyncio.FIRST_COMPLETED,
                                                                     timeout=20.0)
             except Exception as exp:
-                logging.exception(f"await asyncio.wait raised exception: {exp}")
+                logging.exception(f"await asyncio.wait raised {exp=}")
                 if not WSReader.shutdown:
                     continue
                 else:
                     break  # here we don't close any web-socket on purpose - as we can't be sure of the exception reason
             ws_remove_set.clear()
             if WSReader.shutdown:  # disconnect pending_tasks here, completed_tasks after pop and result extraction
-                cls.disconnect_ws_tasks(pending_tasks)
+                await cls.disconnect_ws_tasks(pending_tasks)
                 pending_tasks = []  # breaks outer loop
             while completed_tasks:
                 data_found_task = None
@@ -158,7 +156,7 @@ class WSReader(WSReaderLite):
                 except ConnectionClosedOK as exp:
                     idx = int(data_found_task.get_name())
                     logging.debug('\n', f"web socket connection closed gracefully within while loop for "
-                                        f"{idx};;;{exp=}")
+                                        f"{idx=};;;{exp=}")
                     ws_remove_set.add(idx)
                 except ConnectionClosedError as exp:
                     idx = int(data_found_task.get_name())
@@ -191,11 +189,11 @@ class WSReader(WSReaderLite):
                 if json_str is not None:
                     if WSReader.shutdown:
                         # callback not to be called / relied upon once shutdown detected
-                        cls.disconnect_ws_tasks([WSReader.ws_cont_list[idx]])
+                        await cls.disconnect_ws_tasks([WSReader.ws_cont_list[idx]])
                         logging.warning(f"dropping ws {idx} {json_str}, due to {WSReader.shutdown=};;;{idx=}; "
                                         f"{[WSReader.ws_cont_list[idx]]=}")
                         continue
-                    # else not shutdown - proceed as normal
+                    # else non shutdown - proceed as normal
                     recreated_task = asyncio.create_task(WSReader.ws_cont_list[idx].ws.recv(), name=str(idx))
                     pending_tasks.add(recreated_task)
                     json_len: int = len(json_str)
@@ -209,26 +207,29 @@ class WSReader(WSReaderLite):
                     WSReader.handle_json_str(json_str, ws_cont_)
                 else:
                     logging.error(f"dropping {WSReader.ws_cont_list[idx]} - json_str found None")
-                    WSReader.ws_cont_list[idx].ws.disconnect()
+                    await WSReader.ws_cont_list[idx].disconnect_ws()
                     WSReader.ws_cont_list[idx].force_disconnected = True
                     continue
 
             for idx, ws_cont in enumerate(WSReader.new_ws_cont_list):
                 if WSReader.shutdown:
                     # callback not to be called / relied upon once shutdown detected
-                    cls.disconnect_ws_tasks([WSReader.ws_cont_list[idx]])
                     logging.warning(f"dropping {ws_cont.uri=} of WSReader.new_ws_cont_list, due to {WSReader.shutdown=}"
                                     f";;;{ws_cont=}")
                     continue
-                # else not shutdown - proceed as normal
+                # else non shutdown - proceed as normal
                 WSReader.ws_cont_list.append(ws_cont)
                 idx = WSReader.ws_cont_list.index(ws_cont)
 
                 # default max buffer size is: 10MB, pass max_size=value to connect and increase / decrease the default
                 # size, for eg: max_size=2**24 to change the limit to 16 MB
                 try:
-                    ws_cont.ws = await websockets.connect(ws_cont.uri, ping_timeout=None, max_size=cls.max_ws_buff_size)
+                    ws_cont.ws = await websockets.connect(ws_cont.uri, ping_timeout=None,
+                                                          max_size=WSReaderLite.max_ws_buff_size)
                     task = asyncio.create_task(ws_cont.ws.recv(), name=str(idx))
+                except websockets.exceptions.InvalidURI:
+                    logging.error(f"ws_client error invalid URI: {ws_cont.uri}")
+                    ws_cont.force_disconnected = True
                 except Exception as exp:
                     logging.exception(f"ws_client exception while connecting/async task submission for {ws_cont.uri=};"
                                       f" {ws_cont.ModelClassType=}; {exp=};;;{ws_cont=}")
@@ -240,13 +241,13 @@ class WSReader(WSReaderLite):
         logging.warning(f"WSReader instance going down")
 
     @classmethod
-    def disconnect_ws_tasks(cls, pending_tasks):
+    async def disconnect_ws_tasks(cls, pending_tasks):
         if pending_tasks and 0 != len(pending_tasks):
             disconnected_ws_names: List[str] = []
             disconnected_ws_desc: List[str] = []
             for task in pending_tasks:
                 idx = int(task.get_name())
-                WSReader.ws_cont_list[idx].ws.disconnect()
+                await WSReader.ws_cont_list[idx].disconnect_ws()
                 disconnected_ws_names.append(f"{idx=}; ")
                 disconnected_ws_desc.append(f"{idx=}-{WSReader.ws_cont_list[idx]=}; ")
             logging.warning(f"closed web-socket connections gracefully within while loop for: "
