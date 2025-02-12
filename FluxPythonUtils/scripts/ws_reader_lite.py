@@ -20,7 +20,7 @@ class WSReaderLite:
     size_8_mb: Final[int] = size_1_mb * 8
     size_10_mb: Final[int] = size_1_mb * 10
     size_12_mb: Final[int] = size_1_mb * 12
-    no_warn_size_mb: Final[int] = size_8_mb
+    no_warn_size_mb: Final[int] = size_12_mb
     max_ws_buff_size: ClassVar[int] = size_16_mb
 
     ws_cont_list: ClassVar[List['WSReaderLite']] = list()
@@ -164,7 +164,7 @@ class WSReaderLite:
                         self.force_disconnected = True
                         continue
             finally:
-                # Cleanup connection and tasks
+                # Cleanup connections and tasks
                 for task in pending_tasks:
                     task.cancel()
                 if self.ws and not self.ws.closed:

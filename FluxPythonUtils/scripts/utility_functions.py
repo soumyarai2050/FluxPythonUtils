@@ -92,7 +92,7 @@ class ServiceUnavailable(Exception):
 
 class ThreadSafeAsyncLock:
     """
-    # Critical section for asyncio coroutine
+    # Critical section for asyncio coroutines
         async with thread_safe_async_lock:
 
     # Critical section for threads
@@ -106,14 +106,14 @@ class ThreadSafeAsyncLock:
         await self._async_lock.acquire()
         self._thread_lock.acquire()
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(self, exc_type, exc, tb):
         self._thread_lock.release()
         self._async_lock.release()
 
     def __enter__(self):
         self._thread_lock.acquire()
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type, exc, tb):
         self._thread_lock.release()
 
 
@@ -1156,7 +1156,9 @@ def db_collections(mongo_server_uri: str, database_name: str, ignore_collections
         db = client.get_database(name=database_name)
         collections: List[str] = db.list_collection_names()
         for collection in collections:
-            if collection not in ignore_collections and "." not in collection:
+            if collection.endswith(".files") or collection.endswith(".chunks"):
+                yield db[collection]
+            elif collection not in ignore_collections and "." not in collection:
                 yield db[collection]
     except Exception as e:
         err_str = f"drop_mongo_collections failed for DB: {database_name};;;exception: {e}"
@@ -1954,7 +1956,7 @@ def get_decimal_places(value: int | float) -> int:
     value_str = str(value)
     if "." in value_str:
         return len(value_str.split(".")[1])
-    return 0  # no decimal places
+    return 0  # no decimal point
 
 
 def convert_video_to_audio(video_file_path: str | PurePath, audio_file_path: str | PurePath):

@@ -14,7 +14,6 @@ from FluxPythonUtils.scripts.ws_reader_lite import WSReaderLite
 
 
 class WSReader(WSReaderLite):
-    shutdown: ClassVar[bool] = True
 
     @classmethod
     def start(cls):

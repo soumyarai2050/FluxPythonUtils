@@ -30,17 +30,17 @@ class LLMHelper:
     @staticmethod
     def should_include(path: Union[Path, PurePath], excluded_names: Set[str]) -> bool:
         """
-        Check if a path should be included based on exclusion rules
+        Check if a path should be included based on exclusion rules.
 
         Args:
-             path: Path to check
-             excluded_names: Set of names to exclude (files or directories)
+            path: Path to check
+            excluded_names: Set of names to exclude (files or directories)
 
         Returns:
             bool: True if path should be included, False if it should be excluded
         """
-        # Check each part of the part against excluded names
-        return not(part in excluded_names for part in path.parts)
+        # Check each part of the path against excluded names
+        return not any(part in excluded_names for part in path.parts)
 
     @classmethod
     def build_file_structure(
@@ -62,7 +62,7 @@ class LLMHelper:
         # Combine default excludes with user-provided excludes
         all_excludes = cls.DEFAULT_EXCLUDES | (excluded_names or set())
 
-        def is_excluded(path: Union[Path,  PurePath]) -> bool:
+        def is_excluded(path: Union[Path, PurePath]) -> bool:
             """Check if any part of the path matches excluded names"""
             return any(part in all_excludes for part in path.parts)
 
@@ -90,7 +90,7 @@ class LLMHelper:
                         except ValueError:
                             continue
 
-        # Filter out ant excluded directories that might have slipped through
+        # Filter out any excluded directories that might have slipped through
         return {
             k: v for k, v in structure.items()
             if not is_excluded(k) and v  # Only keep non-empty, non-excluded directories
@@ -101,7 +101,7 @@ class LLMHelper:
         """
         Convert the file structure dictionary into a formatted string representation.
         """
-        output = ["## File Structure\n", '```', "📁 Root"]
+        output = ["## File Structure\n", "```", "📁 Root"]
 
         # Find the common root path
         all_paths = [str(k) for k in structure.keys()] + [str(f) for files in structure.values() for f in files]
@@ -128,7 +128,7 @@ class LLMHelper:
         # Track processed directories to avoid duplication
         processed_dirs = set()
 
-        # Process each directory to avoid duplication
+        # Process each directory and its files
         for dir_path, files in sorted_structure:
             # Split the directory path into components
             dir_parts = PurePath(dir_path).parts
@@ -139,12 +139,12 @@ class LLMHelper:
                 current_path.append(part)
                 dir_str = str(PurePath(*current_path))
                 if dir_str not in processed_dirs:
-                    indent = "" * (len(current_path) - 1)
+                    indent = "|   " * (len(current_path) - 1)
                     output.append(f"{indent}📁 {part}")
                     processed_dirs.add(dir_str)
 
             # Add files
-            base_indent = "" * len(dir_parts)
+            base_indent = "|   " * len(dir_parts)
             for file in sorted(files):
                 file_name = PurePath(file).name
                 if file_name not in processed_dirs:  # Avoid duplicate entries
@@ -164,8 +164,8 @@ class LLMHelper:
         Process a single path (file or directory) and return formatted content.
 
         Args:
-             base_path: Path to process
-             excluded_names: Optional set of names to exclude
+            base_path: Path to process
+            excluded_names: Optional set of names to exclude
         """
         content_parts = []
         path = Path(base_path)
@@ -197,17 +197,17 @@ class LLMHelper:
                         relative_path = PurePath(item).relative_to(base_path)
                         if not is_excluded(relative_path):
                             content_parts.extend([
-                                f"### File: {relative_path}\n"
-                                "```\n"
-                                f"{content}\n"
+                                f"### File: {relative_path}\n",
+                                "```\n",
+                                f"{content}\n",
                                 "```\n"
                             ])
                     except ValueError:
                         if not is_excluded(PurePath(item.name)):
                             content_parts.extend([
-                                f"### File: {item.name}\n"
+                                f"### File: {item.name}\n",
                                 "```\n",
-                                f"{content}\n"
+                                f"{content}\n",
                                 "```\n"
                             ])
 
@@ -241,19 +241,31 @@ class LLMHelper:
         Args:
             text_prompt: The main instruction/prompt text
             file_paths: List of paths to files or directories
-            output_path: Optional output path for the generated output
+            output_path: Optional output path for the generated prompt
             excluded_names: Optional set of names to exclude (files or directories)
         """
         # Initialize the prompt content
         prompt_content: List[str] = [
-            "# LLM Prompt Document\n"
-            "## Main Instruction\n"
-            f"{text_prompt}\n"
+            "# LLM Prompt Document\n",
+            "## Main Instruction\n",
+            f"{text_prompt}\n",
         ]
+
+        # Add file structure section
+        file_structure = cls.build_file_structure(file_paths, excluded_names)
+        prompt_content.extend(cls.format_file_structure(file_structure))
+
+        # Add file contents section
+        prompt_content.append("## File Contents\n")
+
+        # Process all provided paths
+        for path in file_paths:
+            pure_path = PurePath(path)
+            prompt_content.extend(cls.process_path(pure_path, excluded_names))
 
         # Add final instructions
         prompt_content.extend([
-            "## Task\n"
+            "## Task\n",
             "Please analyze the above files and respond according to the main instruction.\n"
         ])
 
@@ -270,12 +282,12 @@ class LLMHelper:
                 return
 
         # Write to output file
-            try:
-                with open(final_output_path, 'w', encoding='utf-8') as f:
-                    f.write('\n'.join(prompt_content))
-                print(f"Successfully generated prompt file: {final_output_path}")
-            except Exception as e:
-                print(f"Error writing prompt file: {str(e)}")
+        try:
+            with open(final_output_path, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(prompt_content))
+            print(f"Successfully generated prompt file: {final_output_path}")
+        except Exception as e:
+            print(f"Error writing prompt file: {str(e)}")
 
     @classmethod
     def get_code_review_prompt(cls, focus_dir_names: List[str] | None = None,
@@ -283,7 +295,7 @@ class LLMHelper:
                                focus_class_names: List[str] | None = None,
                                focus_function_names: List[str] | None = None,
                                bug_count: int | None = None,
-                               bug_type: str = "obvious"):  # used if bug_count_sent; "impacting", "relevant", "trivial"
+                               bug_type: str = "obvious"):  # used if bug_count sent; "impacting", "relevant", "trivial"
         focus_dir_names_str = f"with focus on directories: {focus_dir_names} " if focus_dir_names else ""
         focus_file_names_str = f"with focus on files: {focus_file_names} " if focus_file_names else ""
         focus_class_names_str = f"with focus on classes: {focus_class_names} " if focus_class_names else ""
