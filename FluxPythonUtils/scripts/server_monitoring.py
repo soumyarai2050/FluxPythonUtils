@@ -2,7 +2,7 @@ from pathlib import PurePath
 from datetime import datetime
 import time
 
-from FluxPythonUtils.scripts.utility_functions import configure_logger, get_cpu_usage, get_ram_memory_usage, \
+from FluxPythonUtils.scripts.general_utility_functions import configure_logger, get_cpu_usage, get_ram_memory_usage, \
     get_disk_usage
 
 

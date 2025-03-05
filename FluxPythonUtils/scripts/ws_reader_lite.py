@@ -10,7 +10,7 @@ import logging
 from threading import RLock
 import urllib.parse
 
-from FluxPythonUtils.scripts.utility_functions import get_launcher_name
+from FluxPythonUtils.scripts.general_utility_functions import get_launcher_name
 
 
 class WSReaderLite:

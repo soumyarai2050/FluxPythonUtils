@@ -18,6 +18,7 @@ import os
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import Response
 from pandas import Timestamp
+import polars
 
 
 def to_camel(value):
@@ -206,6 +207,64 @@ class MsgspecBaseModel(msgspec.Struct, kw_only=True):
 
     def to_json_str(self, **kwargs) -> str | bytes:
         return msgspec.json.encode(self, enc_hook=self.enc_hook)
+
+    @classmethod
+    def create_from_df(cls, df: polars.DataFrame) -> 'MsgspecBaseModel':
+        """
+        Static factory method to create new object from DataFrame.
+        """
+        if df.height == 0:
+            raise ValueError("DataFrame is empty")
+
+        # Convert first row to dict
+        row_dict = {col: df[col][0] for col in df.columns}
+
+        # Create new instance with DataFrame values
+        try:
+            instance = cls(**row_dict)
+        except TypeError as e:
+            raise TypeError(f"Failed to create {cls.__name__}: {str(e)}")
+
+        return instance
+
+    @classmethod
+    def create_from_df_array(cls, df: polars.DataFrame) -> List['MsgspecBaseModel']:
+        """
+        Static factory method to create list of objects from DataFrame.
+        """
+        if df.height == 0:
+            return []
+
+        result = []
+        for i in range(df.height):
+            row_dict = {col: df[col][i] for col in df.columns}
+            try:
+                instance = cls(**row_dict)
+                result.append(instance)
+            except TypeError as e:
+                raise TypeError(f"Failed to create {cls.__name__} at row {i}: {str(e)}")
+
+        return result
+
+    def update_from_df(self, df: polars.DataFrame) -> bool:
+        """
+        Updates object members with matching named entries from the DataFrame.
+        Returns False if no matching entries found, True otherwise.
+        """
+        if df.height == 0:
+            return False
+
+        row_dict = {col: df[col][0] for col in df.columns}
+        matched = False
+
+        field_names = set(f.name for f in msgspec.structs.fields(self))
+
+        for field_name in field_names:
+            if field_name in row_dict:
+                setattr(self, field_name, row_dict[field_name])
+                matched = True
+
+        return matched
 
 
 class IncrementalIdBaseModel(PydanticBaseModel):

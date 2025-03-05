@@ -19,7 +19,7 @@ from bs4 import BeautifulSoup
 from dateutil import parser
 
 from FluxPythonUtils.email_adapter.email_handler import EmailHandler
-from FluxPythonUtils.scripts.utility_functions import file_exist
+from FluxPythonUtils.scripts.file_n_general_utility_functions import file_exist
 
 
 class EmailUser:

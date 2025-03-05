@@ -17,7 +17,7 @@ from fastapi.encoders import jsonable_encoder
 
 # project imports
 from FluxPythonUtils.log_analyzer.log_analyzer import LogAnalyzer, LogDetail
-from FluxPythonUtils.scripts.utility_functions import add_logging_level, configure_logger
+from FluxPythonUtils.scripts.general_utility_functions import add_logging_level, configure_logger
 
 
 @pytest.fixture(scope="function")

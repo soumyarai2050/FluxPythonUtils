@@ -7,7 +7,8 @@ from FluxPythonUtils.email_adapter.email_client import EmailClient, Attachment, 
 from FluxPythonUtils.email_adapter.config.configuration import Configuration
 
 # FluxPythonUtils modules
-from FluxPythonUtils.scripts.utility_functions import YAMLConfigurationManager, configure_logger
+from FluxPythonUtils.scripts.file_n_general_utility_functions import YAMLConfigurationManager
+from FluxPythonUtils.scripts.general_utility_functions import configure_logger
 
 
 if __name__ == "__main__":

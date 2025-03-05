@@ -24,7 +24,7 @@ import pendulum
 import setproctitle
 
 # project imports
-from FluxPythonUtils.scripts.utility_functions import (
+from FluxPythonUtils.scripts.general_utility_functions import (
     parse_to_int, re_pattern_to_grep,
     get_log_line_no_from_timestamp, is_file_modified)
 from Flux.PyCodeGenEngine.FluxCodeGenCore.perf_benchmark_decorators import (get_timeit_pattern,

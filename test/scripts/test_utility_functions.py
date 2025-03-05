@@ -1,4 +1,4 @@
-from FluxPythonUtils.scripts.utility_functions import compare_n_patch_dict
+from FluxPythonUtils.scripts.general_utility_functions import compare_n_patch_dict
 
 
 def test_compare_n_patch_dict(stored_dict, update_dict, update_obj):

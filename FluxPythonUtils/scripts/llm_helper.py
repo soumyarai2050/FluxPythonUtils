@@ -337,7 +337,7 @@ if __name__ == "__main__":
 
         # generate_llm_prompt: email_adapter prompt [+mixed string and PurePath objects]
         code_review_paths = [
-            UTILS_SCRIPT_DIR / "utility_functions.py",
+            UTILS_SCRIPT_DIR / "general_utility_functions.py",
             UTILS_SCRIPT_DIR.parent / "email_adapter"
         ]
 
