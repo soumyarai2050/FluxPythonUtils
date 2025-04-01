@@ -235,16 +235,16 @@ class MsgspecBaseModel(msgspec.Struct, kw_only=True):
         if df.height == 0:
             return []
 
-        result = []
+        result_list = []
         for i in range(df.height):
             row_dict = {col: df[col][i] for col in df.columns}
             try:
                 instance = cls(**row_dict)
-                result.append(instance)
+                result_list.append(instance)
             except TypeError as e:
                 raise TypeError(f"Failed to create {cls.__name__} at row {i}: {str(e)}")
 
-        return result
+        return result_list
 
     def update_from_df(self, df: polars.DataFrame) -> bool:
         """

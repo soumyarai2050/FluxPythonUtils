@@ -14,6 +14,7 @@ import getpass
 
 # 3rd party packages
 import pandas as pd
+import polars as pl
 
 # FluxPythonUtils Modules
 from FluxPythonUtils.scripts.yaml_importer import YAMLImporter
@@ -95,14 +96,10 @@ def get_csv_path_from_name_n_dir(file_name: str, data_dir: PurePath | None = Non
         data_dir = PurePath(__file__).parent / "data"
     return PurePath(data_dir / f"{file_name}.csv")
 
-
 def dict_or_list_records_csv_reader(file_name: str, MsgspecType: Type[MsgspecBaseModel],
                                     data_dir: PurePath | None = None, rename_col_names_to_snake_case: bool = False,
                                     rename_col_names_to_lower_case: bool = True,
                                     no_throw: bool = False) -> List[MsgspecBaseModel]:
-    """
-    At this time the method only supports list of msgspec_type extraction form csv
-    """
     if data_dir is None:
         data_dir = PurePath(__file__).parent / "data"
     if not file_name.endswith(".csv"):
@@ -110,12 +107,31 @@ def dict_or_list_records_csv_reader(file_name: str, MsgspecType: Type[MsgspecBas
     csv_path = data_dir / file_name
     str_csv_path = str(csv_path)
     if os.path.exists(str_csv_path) and os.path.getsize(str_csv_path) > 0:
-        read_df = pd.read_csv(csv_path, keep_default_na=False)
-        return pandas_df_to_model_obj_list(read_df, MsgspecType, rename_col_names_to_snake_case,
-                                           rename_col_names_to_lower_case)
+        return dict_or_list_records_polars_csv_reader(MsgspecType, csv_path, rename_col_names_to_snake_case,
+                                                      rename_col_names_to_lower_case, no_throw)
     elif not no_throw:
-        raise Exception(f"dict_or_list_records_csv_reader invoked on empty or no csv file: {str(csv_path)}")
+        raise Exception(f"dict_or_list_records_csv_reader invoked on empty or no csv file: {str_csv_path}")
     return []
+
+def dict_or_list_records_pandas_csv_reader(MsgspecType: Type[MsgspecBaseModel], csv_path: PurePath | None = None,
+                                           rename_col_names_to_snake_case: bool = False,
+                                           rename_col_names_to_lower_case: bool = True) -> List[MsgspecBaseModel]:
+    """
+    At this time the method only supports list of msgspec_type extraction form csv using pandas
+    """
+    read_df = pd.read_csv(csv_path, keep_default_na=False)
+    return pandas_df_to_model_obj_list(read_df, MsgspecType, rename_col_names_to_snake_case,
+                                       rename_col_names_to_lower_case)
+
+
+def dict_or_list_records_polars_csv_reader(MsgspecType: Type[MsgspecBaseModel], csv_path: PurePath | None = None,
+                                           rename_col_names_to_snake_case: bool = False,
+                                           rename_col_names_to_lower_case: bool = True) -> List[MsgspecBaseModel]:
+    """
+    At this time the method only supports list of msgspec_type extraction form csv using polars
+    """
+    read_df = pl.read_csv(str(csv_path))
+    return MsgspecType.create_from_df_array(read_df)
 
 
 def str_from_file(file_path: str) -> str:
@@ -283,3 +299,50 @@ def decrypt_file(file_path: str, decrypted_file_path: str | None = None):
         logging.error(f"decrypt_file failed: {e}")
 
 
+def logical_split_file(destination: str, content: str, max_size: int):
+    """
+    Splits content into multiple files if it exceeds max_size while ensuring logical splits (e.g., newline boundaries).
+
+    :param destination: The base path of the file to be written.
+    :param content: The content to be written.
+    :param max_size: The maximum size for each file in bytes (default: 50MB).
+    :return: List of generated file paths.
+    """
+    base_dir = os.path.dirname(destination)
+    base_name, ext = os.path.splitext(os.path.basename(destination))
+    content_bytes = content.encode('utf-8')
+
+    start = 0
+    file_count = 0
+    generated_files = []
+
+    while start < len(content_bytes):
+        # Find a safe split point before max_size
+        end = min(start + max_size, len(content_bytes))
+        if end < len(content_bytes):
+            # Ensure logical break by looking for the last newline before the max_size limit
+            last_newline = content_bytes.rfind(b'\n', start, end)
+            if last_newline != -1:
+                end = last_newline + 1  # Include the newline
+
+        # Extract the chunk
+        chunk = content_bytes[start:end]
+
+        # Determine filename
+        if file_count == 0 and end >= len(content_bytes):
+            filename = destination  # Single file case
+        else:
+            filename = os.path.join(base_dir, f"{base_name}_part{file_count + 1}{ext}")
+
+        # Write to file
+        with open(filename, 'wb') as f:
+            f.write(chunk)
+
+        # Store the generated file path
+        generated_files.append(filename)
+
+        # Move to the next part
+        start = end
+        file_count += 1
+
+    return generated_files
