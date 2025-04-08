@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field, ConfigDict
 from fastapi.encoders import jsonable_encoder
 
 # project imports
-from FluxPythonUtils.log_analyzer.log_analyzer import LogAnalyzer, LogDetail
+from FluxPythonUtils.log_analyzer.tail_executor import TailExecutor, LogDetail
 from FluxPythonUtils.scripts.general_utility_functions import add_logging_level, configure_logger
 
 
@@ -53,7 +53,7 @@ def test_timeout_1_for_queue_handler(data_queue, data_list, err_obj_list):
 
     transaction_limit = 10
     timeout_secs = 5
-    thread = Thread(target=LogAnalyzer.queue_handler,
+    thread = Thread(target=TailExecutor.queue_handler,
                     args=(data_queue, transaction_limit, timeout_secs, mock_web_client, err_handling_callable,),
                     daemon=True)
     thread.start()
@@ -87,7 +87,7 @@ def test_timeout_2_for_queue_handler(data_queue, data_list):
 
     transaction_limit = 10
     timeout_secs = 5
-    thread = Thread(target=LogAnalyzer.queue_handler,
+    thread = Thread(target=TailExecutor.queue_handler,
                     args=(data_queue, transaction_limit, timeout_secs, mock_web_client, err_handling_callable,),
                     daemon=True)
     thread.start()
@@ -126,7 +126,7 @@ def test_timeout_3_for_queue_handler(data_queue, data_list):
 
     transaction_limit = 10000000
     timeout_secs = 5
-    thread = Thread(target=LogAnalyzer.queue_handler,
+    thread = Thread(target=TailExecutor.queue_handler,
                     args=(data_queue, transaction_limit, timeout_secs, mock_web_client, err_handling_callable,),
                     daemon=True)
     thread.start()
@@ -159,7 +159,7 @@ def test_transaction_limit_for_queue_handler(data_queue, data_list):
 
     transaction_limit = 5
     timeout_secs = 10
-    thread = Thread(target=LogAnalyzer.queue_handler,
+    thread = Thread(target=TailExecutor.queue_handler,
                     args=(data_queue, transaction_limit, timeout_secs, mock_web_client, err_handling_callable,),
                     daemon=True)
     thread.start()
@@ -243,7 +243,7 @@ def config_logger_n_get_log_details() -> List[LogDetail]:
 no_activity_log_detail_list = []
 
 
-class MockLogAnalyzer(LogAnalyzer):
+class MockTailExecutor(TailExecutor):
     def __init__(self, log_details: List[LogDetail]):
         super().__init__(sample_regex_file, sample_config_dict, mock_web_client, MockRawPerformanceData,
                          log_details=log_details)
@@ -258,7 +258,7 @@ class MockLogAnalyzer(LogAnalyzer):
     def _handle_test_check_queue(self):
         transaction_counts_per_call = 5
         timeout_secs = 2
-        MockLogAnalyzer.queue_handler(
+        MockTailExecutor.queue_handler(
             self.test_check_queue, transaction_counts_per_call,
             timeout_secs,
             self.webclient_object.mock_client_callable,
@@ -306,7 +306,7 @@ def test_dynamic_log_files_load_and_start_tail():
                       }))
         log_detail_list.append(log_detail_obj)
 
-    mock_log_analyzer = MockLogAnalyzer(log_detail_list)
+    mock_log_analyzer = MockTailExecutor(log_detail_list)
 
     thread = threading.Thread(target=mock_log_analyzer.log_file_watcher, daemon=True)
     thread.start()
@@ -352,7 +352,7 @@ def test_dynamic_pattern_load_and_start_tail():
                       }, log_file_path_is_regex=True))
         log_detail_list.append(log_detail_obj)
 
-    mock_log_analyzer = MockLogAnalyzer(log_detail_list)
+    mock_log_analyzer = MockTailExecutor(log_detail_list)
 
     thread = threading.Thread(target=mock_log_analyzer.log_file_watcher, daemon=True)
     thread.start()
@@ -388,7 +388,7 @@ def test_no_activity(config_logger_n_get_log_details):
 
     log_details = config_logger_n_get_log_details
 
-    mock_log_analyzer = MockLogAnalyzer(log_details)
+    mock_log_analyzer = MockTailExecutor(log_details)
 
     thread = threading.Thread(target=mock_log_analyzer.log_file_watcher, daemon=True)
     thread.start()
@@ -412,7 +412,7 @@ def test_log_matched_web_client_call(config_logger_n_get_log_details):
 
     log_details = config_logger_n_get_log_details
 
-    mock_log_analyzer = MockLogAnalyzer(log_details)
+    mock_log_analyzer = MockTailExecutor(log_details)
 
     thread = threading.Thread(target=mock_log_analyzer.log_file_watcher, daemon=True)
     thread.start()
@@ -471,7 +471,7 @@ def test_patch_error_handling_in_queue_handler(data_queue, data_list, err_obj_li
         sample_basemodel: SampleBaseModel = SampleBaseModel()
         sample_basemodel.id = i + 1
         data_queue.put(jsonable_encoder(sample_basemodel, by_alias=True, exclude_none=True))
-    thread = Thread(target=LogAnalyzer.queue_handler,
+    thread = Thread(target=TailExecutor.queue_handler,
                     args=(data_queue, transaction_limit, timeout_secs, mock_web_client, err_handling_callable,),
                     daemon=True)
     thread.start()
@@ -510,7 +510,7 @@ def test_connection_error_handling_in_queue_handler(data_queue, data_list, err_o
         sample_basemodel: SampleBaseModel = SampleBaseModel()
         sample_basemodel.id = i + 1
         data_queue.put(jsonable_encoder(sample_basemodel, by_alias=True, exclude_none=True))
-    thread = Thread(target=LogAnalyzer.queue_handler,
+    thread = Thread(target=TailExecutor.queue_handler,
                     args=(data_queue, transaction_limit, timeout_secs, mock_web_client,
                           err_handling_callable, client_connection_fail_retry_secs),
                     daemon=True)
@@ -544,7 +544,7 @@ def test_connection_failure_handling_in_queue_handler(data_queue, data_list, err
         sample_basemodel: SampleBaseModel = SampleBaseModel()
         sample_basemodel.id = i + 1
         data_queue.put(jsonable_encoder(sample_basemodel, by_alias=True, exclude_none=True))
-    thread = Thread(target=LogAnalyzer.queue_handler,
+    thread = Thread(target=TailExecutor.queue_handler,
                     args=(data_queue, transaction_limit, timeout_secs, mock_web_client,
                           err_handling_callable),
                     daemon=True)

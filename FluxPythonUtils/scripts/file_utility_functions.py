@@ -3,7 +3,7 @@ import os
 import logging
 import pickle
 import threading
-from typing import List, Dict, Type
+from typing import List, Dict, Type, TypeVar
 import yaml
 from pathlib import PurePath, Path
 import csv
@@ -19,8 +19,10 @@ import polars as pl
 # FluxPythonUtils Modules
 from FluxPythonUtils.scripts.yaml_importer import YAMLImporter
 from FluxPythonUtils.scripts.model_base_utils import MsgspecBaseModel
-from FluxPythonUtils.scripts.file_n_general_utility_functions import pandas_df_to_model_obj_list, LOG_FORMAT, file_exist
+from FluxPythonUtils.scripts.file_n_general_utility_functions import (
+    pandas_df_to_model_obj_list, polars_df_to_model_obj_list, LOG_FORMAT, file_exist)
 
+MsgspecModel = TypeVar('MsgspecModel', bound=MsgspecBaseModel)
 
 class EmptyFileError(Exception):
     """Exception raised for unexpected empty file.
@@ -99,7 +101,7 @@ def get_csv_path_from_name_n_dir(file_name: str, data_dir: PurePath | None = Non
 def dict_or_list_records_csv_reader(file_name: str, MsgspecType: Type[MsgspecBaseModel],
                                     data_dir: PurePath | None = None, rename_col_names_to_snake_case: bool = False,
                                     rename_col_names_to_lower_case: bool = True,
-                                    no_throw: bool = False) -> List[MsgspecBaseModel]:
+                                    no_throw: bool = False) -> List[MsgspecModel]:
     if data_dir is None:
         data_dir = PurePath(__file__).parent / "data"
     if not file_name.endswith(".csv"):
@@ -108,17 +110,19 @@ def dict_or_list_records_csv_reader(file_name: str, MsgspecType: Type[MsgspecBas
     str_csv_path = str(csv_path)
     if os.path.exists(str_csv_path) and os.path.getsize(str_csv_path) > 0:
         return dict_or_list_records_polars_csv_reader(MsgspecType, csv_path, rename_col_names_to_snake_case,
-                                                      rename_col_names_to_lower_case, no_throw)
+                                                      rename_col_names_to_lower_case)
     elif not no_throw:
         raise Exception(f"dict_or_list_records_csv_reader invoked on empty or no csv file: {str_csv_path}")
     return []
 
 def dict_or_list_records_pandas_csv_reader(MsgspecType: Type[MsgspecBaseModel], csv_path: PurePath | None = None,
                                            rename_col_names_to_snake_case: bool = False,
-                                           rename_col_names_to_lower_case: bool = True) -> List[MsgspecBaseModel]:
+                                           rename_col_names_to_lower_case: bool = True) -> List[MsgspecModel]:
     """
     At this time the method only supports list of msgspec_type extraction form csv using pandas
     """
+    # by setting keep_default_na=False, pandas will ignore its built‐in list of default strings that are
+    # normally recognized as missing values.
     read_df = pd.read_csv(csv_path, keep_default_na=False)
     return pandas_df_to_model_obj_list(read_df, MsgspecType, rename_col_names_to_snake_case,
                                        rename_col_names_to_lower_case)
@@ -126,12 +130,15 @@ def dict_or_list_records_pandas_csv_reader(MsgspecType: Type[MsgspecBaseModel], 
 
 def dict_or_list_records_polars_csv_reader(MsgspecType: Type[MsgspecBaseModel], csv_path: PurePath | None = None,
                                            rename_col_names_to_snake_case: bool = False,
-                                           rename_col_names_to_lower_case: bool = True) -> List[MsgspecBaseModel]:
+                                           rename_col_names_to_lower_case: bool = True) -> List[MsgspecModel]:
     """
     At this time the method only supports list of msgspec_type extraction form csv using polars
     """
-    read_df = pl.read_csv(str(csv_path))
-    return MsgspecType.create_from_df_array(read_df)
+    # null_values tells Polars not to treat any values as null unless you explicitly specify them. In
+    # dict_or_list_records_pandas_csv_reader we do similar with keep_default_na=False
+    read_df = pl.read_csv(str(csv_path), null_values=[])
+    return polars_df_to_model_obj_list(read_df, MsgspecType, rename_col_names_to_snake_case,
+                                       rename_col_names_to_lower_case)
 
 
 def str_from_file(file_path: str) -> str:

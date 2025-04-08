@@ -11,6 +11,7 @@ from datetime import datetime
 
 # 3rd party packages
 import pandas as pd
+import polars as pl
 
 # FluxPythonUtils Modules
 from FluxPythonUtils.scripts.yaml_importer import YAMLImporter
@@ -111,6 +112,17 @@ def _get_file_handler(log_file_dir_path: str, log_file_name: str):
     return file_handler
 
 
+def get_camel_cased_column_name(col_name: str, rename_col_names_to_lower_case: bool = True):
+    col_name = col_name.replace('/', '')
+    col_name = col_name.replace(' ', '')
+    col_name = col_name.replace('(', '')
+    col_name = col_name.replace(')', '')
+    new_col_name: str = convert_camel_case_to_specific_case(col_name,
+                                                            lower_case=rename_col_names_to_lower_case)
+    new_col_name.replace(' ', '')
+    return new_col_name
+
+
 def pandas_df_to_model_obj_list(read_df, MsgspecType: Type[MsgspecBaseModel],
                                 rename_col_names_to_snake_case: bool = False,
                                 rename_col_names_to_lower_case: bool = True):
@@ -121,19 +133,50 @@ def pandas_df_to_model_obj_list(read_df, MsgspecType: Type[MsgspecBaseModel],
         old_to_new_col_name_dict: Dict[str, str] = {}
         for col_name in col_names:
             orig_col_name: str = copy.deepcopy(col_name)
-            col_name = col_name.replace('/', '')
-            col_name = col_name.replace(' ', '')
-            col_name = col_name.replace('(', '')
-            col_name = col_name.replace(')', '')
-            new_col_name: str = convert_camel_case_to_specific_case(col_name,
-                                                                    lower_case=rename_col_names_to_lower_case)
-            new_col_name.replace(' ', '')
+            new_col_name = get_camel_cased_column_name(col_name, rename_col_names_to_lower_case)
             old_to_new_col_name_dict[orig_col_name] = new_col_name
         read_df.rename(columns=old_to_new_col_name_dict, inplace=True)
     read_df = pd.DataFrame(read_df).replace({'': None})
     data_dict_list = read_df.to_dict(orient='records')
     msgspec_obj_dict = MsgspecType.from_dict_list(data_dict_list, strict=False)
+    return msgspec_obj_dict
 
+
+def polars_df_to_model_obj_list(read_df, MsgspecType: Type[MsgspecBaseModel],
+                                rename_col_names_to_snake_case: bool = False,
+                                rename_col_names_to_lower_case: bool = True):
+    """
+    Convert a Polars DataFrame to a list of msgspec model objects.
+
+    Args:
+        read_df: Polars DataFrame
+        MsgspecType: The msgspec model class
+        rename_col_names_to_snake_case: Whether to convert column names to snake_case
+        rename_col_names_to_lower_case: Whether to convert column names to lowercase
+
+    Returns:
+        List of msgspec model objects
+    """
+    if rename_col_names_to_snake_case:
+        # replace any special characters and convert name to snake_case
+        col_names = read_df.columns
+        old_to_new_col_name_dict = {}
+
+        for col_name in col_names:
+            orig_col_name = copy.deepcopy(col_name)
+            new_col_name = get_camel_cased_column_name(col_name, rename_col_names_to_lower_case)
+            old_to_new_col_name_dict[orig_col_name] = new_col_name
+
+        # In Polars, we use .rename to create a new DataFrame with renamed columns
+        read_df = read_df.rename(old_to_new_col_name_dict)
+
+    # Replace empty strings with None in string columns only
+    for col in read_df.columns:
+        if read_df[col].dtype == pl.Utf8:
+            read_df = read_df.with_columns(
+                pl.when(pl.col(col) == "").then(None).otherwise(pl.col(col)).alias(col)
+            )
+    msgspec_obj_dict = MsgspecType.create_from_df_array(read_df)
     return msgspec_obj_dict
 
 

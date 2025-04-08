@@ -221,7 +221,7 @@ class MsgspecBaseModel(msgspec.Struct, kw_only=True):
 
         # Create new instance with DataFrame values
         try:
-            instance = cls(**row_dict)
+            instance = cls.from_dict(row_dict)
         except TypeError as e:
             raise TypeError(f"Failed to create {cls.__name__}: {str(e)}")
 
@@ -239,7 +239,7 @@ class MsgspecBaseModel(msgspec.Struct, kw_only=True):
         for i in range(df.height):
             row_dict = {col: df[col][i] for col in df.columns}
             try:
-                instance = cls(**row_dict)
+                instance = cls.from_dict(row_dict)
                 result_list.append(instance)
             except TypeError as e:
                 raise TypeError(f"Failed to create {cls.__name__} at row {i}: {str(e)}")

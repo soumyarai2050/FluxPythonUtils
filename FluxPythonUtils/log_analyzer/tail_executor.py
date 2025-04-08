@@ -69,7 +69,7 @@ class LogDetail(MsgspecBaseModel, kw_only=True):
     data_snapshot_version: float | None = None
 
 
-class LogAnalyzer(ABC):
+class TailExecutor(ABC):
     timestamp_regex_pattern: str = r'\b\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}\b'
     max_str_size_in_bytes: int = 2048
     log_seperator: str = ';;;'
@@ -146,7 +146,7 @@ class LogAnalyzer(ABC):
             if log_file_path not in pattern_matched_added_file_path_to_service_dict:
                 logging.info(
                     f"Can't find {log_file_path=} in log analyzer cache dict keys used to avoid repeated file "
-                    f"tail executor start{LogAnalyzer.log_seperator}{pattern_matched_added_file_path_to_service_dict=}")
+                    f"tail executor start{TailExecutor.log_seperator}{pattern_matched_added_file_path_to_service_dict=}")
             else:
                 pattern_matched_added_file_path_to_service_dict.pop(log_file_path)
                 logging.debug(f"Removed cache for {log_file_path=}")
@@ -176,7 +176,7 @@ class LogAnalyzer(ABC):
                          log_detail_type: Type[LogDetail], log_file_watcher_err_handler: Callable[..., Any],
                          clear_cache_file_path_queue: multiprocessing.Queue):
         if log_details is None or len(log_details) == 0:
-            raise Exception(f"No log files provided for analysis{LogAnalyzer.log_seperator} "
+            raise Exception(f"No log files provided for analysis{TailExecutor.log_seperator} "
                             f"log_details: {log_details}")
 
         # LOW todo: add file create date time handling + file removed handling - currently works since tail is
@@ -200,7 +200,7 @@ class LogAnalyzer(ABC):
                         if os.path.exists(log_detail.log_file_path):
 
                             if log_detail.log_file_path not in tail_executor_started_files_cache_dict:
-                                LogAnalyzer._handle_log_file_path_not_regex(log_details_queue, log_detail)
+                                TailExecutor._handle_log_file_path_not_regex(log_details_queue, log_detail)
                                 # avoids any pattern matched file in regex case to get started again
                                 tail_executor_started_files_cache_dict[log_detail.log_file_path] = [log_detail.service]
                                 logging.debug(f"Creating static file path cache entry "
@@ -210,7 +210,7 @@ class LogAnalyzer(ABC):
                                 log_detail_service_list: List[str] = (
                                     tail_executor_started_files_cache_dict.get(log_detail.log_file_path))
                                 if log_detail.service not in log_detail_service_list:
-                                    LogAnalyzer._handle_log_file_path_not_regex(log_details_queue, log_detail)
+                                    TailExecutor._handle_log_file_path_not_regex(log_details_queue, log_detail)
                                     # avoids any pattern matched file in regex case to get started again
                                     tail_executor_started_files_cache_dict[log_detail.log_file_path].append(
                                         log_detail.service)
@@ -223,8 +223,8 @@ class LogAnalyzer(ABC):
                         for pattern_matched_file_path in pattern_matched_file_paths:
                             # avoiding recently added files with this log_detail object
                             if pattern_matched_file_path not in tail_executor_started_files_cache_dict:
-                                LogAnalyzer._handle_log_file_path_is_regex(log_detail_type, log_details_queue,
-                                                                           log_detail, pattern_matched_file_path)
+                                TailExecutor._handle_log_file_path_is_regex(log_detail_type, log_details_queue,
+                                                                            log_detail, pattern_matched_file_path)
                                 tail_executor_started_files_cache_dict[pattern_matched_file_path] = [log_detail.service]
                                 logging.debug(f"Creating dynamic file path cache entry "
                                               f"for {pattern_matched_file_path=} with "
@@ -234,8 +234,8 @@ class LogAnalyzer(ABC):
                                 log_detail_service_list: List[str] = (
                                     tail_executor_started_files_cache_dict.get(pattern_matched_file_path))
                                 if log_detail.service not in log_detail_service_list:
-                                    LogAnalyzer._handle_log_file_path_is_regex(log_detail_type, log_details_queue,
-                                                                               log_detail, pattern_matched_file_path)
+                                    TailExecutor._handle_log_file_path_is_regex(log_detail_type, log_details_queue,
+                                                                                log_detail, pattern_matched_file_path)
                                     tail_executor_started_files_cache_dict[pattern_matched_file_path].append(
                                         log_detail.service)
                                     logging.debug(f"Adding dynamic file path cache entry "
@@ -251,7 +251,7 @@ class LogAnalyzer(ABC):
                                          alert_create_date_time=DateTime.utcnow())
 
     @classmethod
-    def run_tail_executor(cls, log_detail, **kwargs):
+    def run_single_tail_executor(cls, log_detail, **kwargs):
         # changing process name
         p_name = multiprocessing.current_process().name
         setproctitle.setproctitle(p_name)   # renames process
@@ -291,7 +291,7 @@ class LogAnalyzer(ABC):
                 file_path_to_log_analyzer_shm_obj_dict[log_detail.log_file_path] = log_analyzer_shm
             # else not required: taking value of processed_timestamp to restart set before passing log_detail to restart
 
-            spawn_process = spawn.Process(target=cls.run_tail_executor, args=(log_detail,),
+            spawn_process = spawn.Process(target=cls.run_single_tail_executor, args=(log_detail,),
                                           kwargs=kwargs, daemon=True, name=process_name)
             spawn_process.start()
             logging.info(f"started tail executor for {log_detail.log_file_path}")
@@ -427,7 +427,7 @@ class LogAnalyzer(ABC):
                 # else not required: service is not critical or poll_timeout is not breached - skipping periodic
                 # check for new logs
 
-    def _analyze_log(self, log_detail: LogDetail) -> int:
+    def _analyze_log(self, log_detail: LogDetail) -> int | None:
         source_file_name = PurePath(__file__).name
         while log_detail.is_running:
             try:
@@ -441,7 +441,7 @@ class LogAnalyzer(ABC):
                 if line.startswith("==>"):
                     continue
 
-                timestamp_pattern = re.compile(LogAnalyzer.timestamp_regex_pattern)
+                timestamp_pattern = re.compile(TailExecutor.timestamp_regex_pattern)
                 match = timestamp_pattern.search(line)
                 if match:
                     timestamp = match.group(0)
@@ -452,13 +452,13 @@ class LogAnalyzer(ABC):
                     if "giving up on this name" in line:
                         brief_msg_str: str = (f"tail error encountered in log service: {log_detail.service}, "
                                               f"restarting...")
-                        logging.critical(f"{brief_msg_str}{LogAnalyzer.log_seperator}{line}")
+                        logging.critical(f"{brief_msg_str}{TailExecutor.log_seperator}{line}")
                         self.notify_tail_event_in_log_service("warning", brief_msg_str, line, PurePath(__file__).name,
                                                               inspect.currentframe().f_lineno, DateTime.utcnow())
                         return 1
                     elif "has appeared;  following new file" in line:   # tail reconnected notify
-                        brief_msg_str: str = (f"tail reconnected to {log_detail.log_file_path=}")
-                        logging.critical(f"{brief_msg_str}{LogAnalyzer.log_seperator}{line}")
+                        brief_msg_str: str = f"tail reconnected to {log_detail.log_file_path=}"
+                        logging.critical(f"{brief_msg_str}{TailExecutor.log_seperator}{line}")
                         self.notify_tail_event_in_log_service("warning", brief_msg_str, line, PurePath(__file__).name,
                                                               inspect.currentframe().f_lineno, DateTime.utcnow())
                     logging.warning(line)
@@ -494,7 +494,7 @@ class LogAnalyzer(ABC):
 
                     # reducing the size of log_message brief if exceeds limit before
                     # going to check skil patterns
-                    log_seperator_index = log_message.find(LogAnalyzer.log_seperator)
+                    log_seperator_index = log_message.find(TailExecutor.log_seperator)
                     if log_seperator_index != -1:
                         log_msg_brief = log_message[:log_seperator_index]
                     else:
@@ -502,7 +502,7 @@ class LogAnalyzer(ABC):
                         log_msg_brief = log_message
 
                     if self._is_str_limit_breached(log_msg_brief):
-                        log_msg_brief = log_msg_brief[:LogAnalyzer.max_str_size_in_bytes]
+                        log_msg_brief = log_msg_brief[:TailExecutor.max_str_size_in_bytes]
 
                         if log_seperator_index != -1:
                             err_str = ("Log string brief is too long, adjusting the string length for "
@@ -512,7 +512,7 @@ class LogAnalyzer(ABC):
                             err_str = ("Log string doesn't contain log seperator to slice msg brief from it "
                                        "and whole log string is too long, adjusting the string length for "
                                        f"optimization reasons - please use log_seperator: "
-                                       f"{LogAnalyzer.log_seperator} to specify brief and detail in log, "
+                                       f"{TailExecutor.log_seperator} to specify brief and detail in log, "
                                        f"adjusted log brief: {log_msg_brief}")
 
                         self.notify_error(err_str, source_file_name, inspect.currentframe().f_lineno, DateTime.utcnow())
@@ -521,7 +521,7 @@ class LogAnalyzer(ABC):
                     for regex_pattern in self.regex_list:
                         try:
                             if re.compile(fr"{regex_pattern}").search(log_msg_brief):
-                                logging.info(f"regex pattern matched, skipping{LogAnalyzer.log_seperator} "
+                                logging.info(f"regex pattern matched, skipping{TailExecutor.log_seperator} "
                                              f"log_message: {log_msg_brief[:200]}")
                                 regex_match = True
                                 break
@@ -552,18 +552,18 @@ class LogAnalyzer(ABC):
             except queue.Empty:
                 logging.info(f"No Data found for last {log_detail.poll_timeout} secs in _analyze_log")
             except Exception as e:
-                err_str_ = f"_analyze_log failed{LogAnalyzer.log_seperator} exception: {e}"
+                err_str_ = f"_analyze_log failed{TailExecutor.log_seperator} exception: {e}"
                 logging.exception(err_str_)
                 self.notify_error(err_str_, source_file_name, inspect.currentframe().f_lineno, DateTime.utcnow())
 
     def _is_str_limit_breached(self, text: str) -> bool:
-        if len(text.encode("utf-8")) > LogAnalyzer.max_str_size_in_bytes:
+        if len(text.encode("utf-8")) > TailExecutor.max_str_size_in_bytes:
             return True
         return False
 
     def _truncate_str(self, text: str) -> str:
         if self._is_str_limit_breached(text):
-            text = text.encode("utf-8")[:LogAnalyzer.max_str_size_in_bytes].decode()
+            text = text.encode("utf-8")[:TailExecutor.max_str_size_in_bytes].decode()
             service_detail: LogDetail = getattr(current_thread(), "service_detail")
             text += f"...check the file: {service_detail.log_file_path} to see the entire log"
         return text
