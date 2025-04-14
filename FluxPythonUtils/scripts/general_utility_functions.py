@@ -16,6 +16,8 @@ import msgspec
 import pandas
 import pexpect
 import yaml
+import signal
+import time
 from enum import IntEnum
 from pathlib import PurePath, Path
 import csv
@@ -1217,6 +1219,55 @@ def get_pid_from_port(port: int):
 
     return None
 
+def find_pids_by_command(command_substring, ignore_case=False):
+    """
+    Finds process IDs (PIDs) of running processes whose command line
+    contains the given substring.
+
+    Args:
+        command_substring (str): The substring to search for in the process
+                                 command lines.
+        ignore_case (bool): Whether the search should be case-insensitive.
+                            Defaults to False.
+
+    Returns:
+        list[int]: A list of PIDs for matching processes. Returns an empty
+                   list if no matches are found or if the substring is empty.
+    """
+    if not command_substring:
+        print("Warning: Empty command substring provided.")
+        return []
+
+    matching_pids = []
+    search_term = command_substring.lower() if ignore_case else command_substring
+
+    # Iterate over all running processes
+    for process in psutil.process_iter(['pid', 'cmdline']):
+        try:
+            # Get the full command line arguments for the process
+            # cmdline() returns a list of strings (e.g., ['python', 'my_script.py', '-a'])
+            cmdline_list = process.info.get('cmdline')
+
+            if cmdline_list:
+                # Join the list into a single string for easier searching
+                # Using shlex.join might be more precise if dealing with complex quoting,
+                # but simple space join is usually sufficient for searching.
+                full_cmdline = ' '.join(cmdline_list)
+
+                # Perform the search (case-insensitive or sensitive)
+                cmd_to_check = full_cmdline.lower() if ignore_case else full_cmdline
+                if search_term in cmd_to_check:
+                    matching_pids.append(process.info['pid'])
+
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            # Process might have terminated, or we lack permissions
+            continue
+        except Exception as e:
+            # Catch other potential errors during process info retrieval
+            print(f"Warning: Could not inspect process {process.pid}: {e}")
+            continue
+    return matching_pids
+
 # @@@ deprecated: not recommended for first choice - only use if really required
 # def is_process_running(pid: int) -> bool:
 #     try:
@@ -1249,6 +1300,32 @@ def is_process_running(pid: int | None) -> bool:
         except psutil.NoSuchProcess:
             return False
     return False
+
+
+def terminate_process(pid):
+    try:
+        # First try sending SIGTERM (graceful termination)
+        os.kill(pid, signal.SIGTERM)
+
+        # Give the process some time to terminate
+        for _ in range(10):  # Wait up to 1 second
+            time.sleep(0.1)
+            try:
+                # Check if process still exists
+                os.kill(pid, 0)
+            except OSError:
+                # Process has terminated
+                logging.info(f"Process {pid} terminated successfully")
+                return True
+
+        # If we get here, process didn't terminate with SIGTERM
+        logging.info(f"Process {pid} didn't terminate with SIGTERM, trying SIGKILL")
+        os.kill(pid, signal.SIGKILL)
+        return True
+
+    except OSError as e:
+        logging.exception(f"Error terminating process {pid}: {e}")
+        return False
 
 
 def re_pattern_to_grep(pattern: str) -> str:
@@ -1514,3 +1591,22 @@ if __name__ == "__main__":
         print("Done")
 
     main()
+
+
+def get_transaction_counts_n_timeout_from_config(config_yaml_dict: Dict | None,
+                                                 default_transaction_counts: int = 1,
+                                                 default_transaction_timeout_secs: int = 2,
+                                                 is_server_config: bool = True):
+    if not config_yaml_dict:
+        transaction_counts_per_call = default_transaction_counts
+        transaction_timeout_secs = default_transaction_timeout_secs
+    else:
+        if is_server_config:
+            if (transaction_counts_per_call := config_yaml_dict.get("transaction_counts_per_call_for_server")) is None:
+                transaction_counts_per_call = default_transaction_counts
+        else:
+            if (transaction_counts_per_call := config_yaml_dict.get("transaction_counts_per_call_for_tail_ex")) is None:
+                transaction_counts_per_call = default_transaction_counts
+        if (transaction_timeout_secs := config_yaml_dict.get("transaction_timeout_secs")) is None:
+            transaction_timeout_secs = default_transaction_timeout_secs
+    return transaction_counts_per_call, transaction_timeout_secs

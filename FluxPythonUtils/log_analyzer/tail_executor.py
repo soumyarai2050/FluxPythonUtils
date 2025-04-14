@@ -16,7 +16,6 @@ from pathlib import PurePath
 import multiprocessing
 from filelock import FileLock
 import inspect
-from datetime import timedelta
 
 # 3rd part imports
 from pendulum import DateTime
@@ -31,25 +30,6 @@ from Flux.PyCodeGenEngine.FluxCodeGenCore.perf_benchmark_decorators import (get_
                                                                             get_timeit_field_separator)
 from FluxPythonUtils.scripts.model_base_utils import MsgspecBaseModel
 from FluxPythonUtils.log_analyzer.log_analyzer_shm import LogAnalyzerSHM
-
-
-def get_transaction_counts_n_timeout_from_config(config_yaml_dict: Dict | None,
-                                                 default_transaction_counts: int = 1,
-                                                 default_transaction_timeout_secs: int = 2,
-                                                 is_server_config: bool = True):
-    if not config_yaml_dict:
-        transaction_counts_per_call = default_transaction_counts
-        transaction_timeout_secs = default_transaction_timeout_secs
-    else:
-        if is_server_config:
-            if (transaction_counts_per_call := config_yaml_dict.get("transaction_counts_per_call_for_server")) is None:
-                transaction_counts_per_call = default_transaction_counts
-        else:
-            if (transaction_counts_per_call := config_yaml_dict.get("transaction_counts_per_call_for_tail_ex")) is None:
-                transaction_counts_per_call = default_transaction_counts
-        if (transaction_timeout_secs := config_yaml_dict.get("transaction_timeout_secs")) is None:
-            transaction_timeout_secs = default_transaction_timeout_secs
-    return transaction_counts_per_call, transaction_timeout_secs
 
 
 class LogDetail(MsgspecBaseModel, kw_only=True):
