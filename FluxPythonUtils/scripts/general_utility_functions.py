@@ -8,7 +8,8 @@ import pickle
 import re
 import sys
 import threading
-from typing import List, Dict, Tuple, Type, Set, Any, Iterable, Final, Optional
+from typing import List, Dict, Tuple, Type, Set, Any, Iterable, Final, Optional, Callable, get_type_hints
+import inspect
 import socket
 from contextlib import closing
 import multiprocessing
@@ -1610,3 +1611,46 @@ def get_transaction_counts_n_timeout_from_config(config_yaml_dict: Dict | None,
         if (transaction_timeout_secs := config_yaml_dict.get("transaction_timeout_secs")) is None:
             transaction_timeout_secs = default_transaction_timeout_secs
     return transaction_counts_per_call, transaction_timeout_secs
+
+
+def is_first_param_list_type(func: Callable):
+    # Get signature information
+    signature = inspect.signature(func)
+
+    # Get list of parameters
+    params = list(signature.parameters.values())
+
+    # Check if there's at least one parameter
+    if not params:
+        return False
+
+    # Get the first parameter
+    first_param = params[0]
+
+    # Try to get type hint from function annotations
+    type_hints = get_type_hints(func)
+    first_param_name = first_param.name
+
+    # Check if the first parameter is annotated with list type
+    if first_param_name in type_hints:
+        param_type = type_hints[first_param_name]
+        # Check for various list type annotations (List, list, etc.)
+        return (param_type == list or
+                getattr(param_type, "__origin__", None) == list or
+                getattr(param_type, "__origin__", None) == List)
+    elif first_param.annotation is not inspect.Parameter.empty:
+        param_type = first_param.annotation
+        return (param_type == list or
+                getattr(param_type, "__origin__", None) == list or
+                getattr(param_type, "__origin__", None) == List)
+    return False
+
+def find_files_with_regex(directory, pattern):
+    regex = re.compile(pattern)
+    matching_files = []
+
+    for root, dirs, files in os.walk(directory):
+        for file in files:
+            if regex.match(file):
+                matching_files.append(str(os.path.join(root, file)))
+    return matching_files
