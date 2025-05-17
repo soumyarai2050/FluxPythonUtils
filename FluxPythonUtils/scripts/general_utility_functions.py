@@ -909,7 +909,7 @@ def parse_to_int(int_str: str | int | float, raise_exception: bool = True) -> in
         err_str = f"{type(int_str)} is not parsable to integer, exception: {e}"
         logging.exception(err_str)
         if raise_exception:
-            raise Exception(err_str)
+            raise ValueError(err_str)
         return None
 
 
@@ -920,7 +920,7 @@ def parse_to_float(float_str: str) -> float:
     except ValueError as e:
         err_str = f"{type(float_str)} is not parsable to float, exception: {e}"
         logging.exception(err_str)
-        raise Exception(err_str)
+        raise ValueError(err_str)
 
 
 def _connect_mongo(db: str, host: str | None = 'localhost', port: int | None = 27017,
