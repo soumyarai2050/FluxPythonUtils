@@ -17,11 +17,12 @@ class WSReaderLite:
     shutdown: ClassVar[bool] = True
     size_1_mb: Final[int] = 2 ** 20
     size_16_mb: Final[int] = size_1_mb * 16
+    size_20_mb: Final[int] = size_1_mb * 20
     size_8_mb: Final[int] = size_1_mb * 8
     size_10_mb: Final[int] = size_1_mb * 10
     size_12_mb: Final[int] = size_1_mb * 12
     no_warn_size_mb: Final[int] = size_12_mb
-    max_ws_buff_size: ClassVar[int] = size_16_mb
+    max_ws_buff_size: ClassVar[int] = size_20_mb
 
     ws_cont_list: ClassVar[List['WSReaderLite']] = list()
 

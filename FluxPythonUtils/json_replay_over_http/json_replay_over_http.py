@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime
+import orjson
 import requests
 import json
 from json import JSONDecodeError
@@ -39,7 +40,7 @@ class JSONReplayOverHTTP:
         for file in processed_files:
             try:
                 with open(os.path.join(json_msg_dir, file)) as f:
-                    json_dict = json.loads(f.read())
+                    json_dict = orjson.loads(f.read())
                     self._publish_message(json_dict)
             except JSONDecodeError as e:
                 logging.exception(f"Failed to load json message! {e}")

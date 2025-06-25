@@ -6,6 +6,7 @@ import os
 import logging
 import pickle
 import re
+import shlex
 import sys
 import threading
 from typing import List, Dict, Tuple, Type, Set, Any, Iterable, Final, Optional, Callable, get_type_hints
@@ -13,6 +14,8 @@ import inspect
 import socket
 from contextlib import closing
 import multiprocessing
+from zoneinfo import ZoneInfo
+
 import msgspec
 import pandas
 import pexpect
@@ -107,6 +110,31 @@ class ThreadSafeAsyncLock:
 
     def __exit__(self, exc_type, exc, tb):
         self._thread_lock.release()
+
+
+def get_years_remaining_in_float(end_date: datetime):
+    """
+    Calculate the remaining period to end_data in years
+
+    Args:
+        end_date (datetime): Obvious
+
+    Returns:
+        float: The remaining period to maturity in years
+    """
+    today = datetime.now(tz=ZoneInfo("Asia/Singapore"))
+
+    # If the end date has already passed
+    if end_date < today:
+        return 0.0
+
+    # Calculate the difference in days
+    days_remaining = (end_date - today).days + ((end_date - today).seconds / 86400)
+
+    # Convert days to years (approximately)
+    years_remaining = days_remaining / 365.25  # Account for leap years
+
+    return years_remaining
 
 
 def log_n_except(original_function):
@@ -292,35 +320,231 @@ def get_json_array_as_msgspec_dict(json_key: str, json_data_list, MsgspecType: T
     return msgspec_dict
 
 
-def scp_handler(scp_src_path: PurePath, scp_src_user, scp_src_server, scp_dest_dir: PurePath, scp_password: str) -> bool:
-    scp_command = f"scp -q {scp_src_user}@{scp_src_server}:{scp_src_path} {scp_dest_dir}/."
-    expect_ = "password:"
-    if not pexpect_command_expect_response_handler(scp_command, expect_, scp_password):
-        logging.error(f"scp_command failed: likely key error or connection timeout, try cmd manually once - happens "
-                      f"once for new cert new server, cmd: {scp_command}")
+def scp_handler_scp_transfer_with_password_authentication(scp_src_path: PurePath, scp_src_user: str,
+                                                          scp_src_server: str, scp_dest_dir: PurePath,
+                                                          scp_password: str) -> bool:
+    """Handle SCP file transfer with password authentication.
+
+    Args:
+        scp_src_path: Source file path on remote server
+        scp_src_user: Username for remote server
+        scp_src_server: Remote server hostname/IP
+        scp_dest_dir: Local destination directory
+        scp_password: Password for authentication
+
+    Returns:
+        True if transfer successful, False otherwise
+    """
+    # Better parameter validation
+    if not str(scp_src_path).strip():
+        logging.error("SCP handler: source path is empty")
         return False
-    return True  # TODO: needs improvement - failures also report True it appears
+    if not str(scp_src_user).strip():
+        logging.error("SCP handler: username is empty")
+        return False
+    if not str(scp_src_server).strip():
+        logging.error("SCP handler: server is empty")
+        return False
+    if not str(scp_dest_dir).strip():
+        logging.error("SCP handler: destination directory is empty")
+        return False
 
-
-def pexpect_command_expect_response_handler(command_: str, expect_: str, response_: str) -> int:
-    retval: bool = False
+    # Proper Path handling - convert PurePath to concrete Path safely
     try:
-        handler = pexpect.spawn(command_)
-        i = handler.expect([expect_, pexpect.EOF])
-        if i == 0:  # all good send password
-            handler.sendline(response_)
-            handler.expect(pexpect.EOF)
-            retval = True
-        elif i == 1:
-            logging.error(f"pexpect_command_expect_response_handler command failed, try cmd manually cmd: {command_}")
-        else:
-            logging.error(f"pexpect_command_expect_response_handler: unexpected expect() returned: {i} for cmd "
-                          f"response of: {command_}, expected 0 or 1")
-        handler.close()
-        return retval
+        dest_path = Path(str(scp_dest_dir))
     except Exception as e:
-        logging.exception(f"pexpect_scp_handler: failed for cmd: {command_}, exception: {e}")
-        return retval
+        logging.error(f"Invalid destination path {scp_dest_dir}: {e}")
+        return False
+
+    # Better directory creation with file vs directory check
+    try:
+        if dest_path.exists():
+            if not dest_path.is_dir():
+                logging.error(f"Destination exists but is not a directory: {dest_path}")
+                return False
+        else:
+            dest_path.mkdir(parents=True, exist_ok=True)
+            logging.info(f"Created destination directory: {dest_path}")
+    except PermissionError as e:
+        logging.error(f"Permission denied creating destination directory {dest_path}: {e}")
+        return False
+    except OSError as e:
+        logging.error(f"Cannot create destination directory {dest_path}: {e}")
+        return False
+
+    # Quote only the path part, not the entire remote spec
+    # Handle windows path separators properly
+    safe_src_path = shlex.quote(str(scp_src_path))
+    remote_spec = f"{scp_src_user}@{scp_src_server}:{safe_src_path}"
+
+    # Use forward slashes for destination (SCP expects POSIX-style paths)
+    dest_with_dot = str(dest_path.replace('\\', '/')) + "/."
+    safe_dest = shlex.quote(dest_with_dot)
+
+    scp_command = f"scp -q -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {remote_spec} {safe_dest}"
+
+    # Log the actual command for debugging
+    logging.info(f"Executing SCP command: {scp_command}")
+
+    # Execute with improved error handling
+    success = pexpect_command_expect_response_handler(scp_command, scp_password)
+
+    if not success:
+        logging.error(
+            f"SCP command failed for {scp_src_user}@{scp_src_server}:{scp_src_path} -> {dest_path};;;"
+            f"MANUAL COMMAND TO TRY: {scp_command} ;;;This could be due to: 1. Incorrect credentials "
+            f"2. File not found on remote server 3. Network connectivity issues 4. Permission denied on remote server "
+            f"5. SSH key conflicts")
+        return False
+
+    # More specific exception handling - don't mask real failures
+    try:
+        src_filename = Path(str(scp_src_path)).name
+        if not src_filename:
+            logging.warning("Cannot verify file transfer: source path appears to be a directory")
+            return True
+
+        expected_file = dest_path / src_filename
+        if not expected_file.exists():
+            logging.error(f"SCP reported success but file not found at: {expected_file}")
+            return False
+
+        # Check file size
+        file_size = expected_file.stat().st_size
+        logging.info(f"SCP transfer verified successful: {scp_src_path} -> {expected_file} ({file_size} bytes)")
+        return True
+
+    except FileNotFoundError:
+        # This is a real failure - don't mask it
+        logging.error("File verification failed: transferred file not found")
+        return False
+    except PermissionError as e:
+        logging.warning(f"Cannot verify file transfer due to permissions: {e}")
+        return True  # Assume success since scp didn't fail
+    except Exception as e:
+        logging.warning(f"Unexpected error during file verification: {e}")
+        return True  # Only for truly unexpected errors
+
+
+def pexpect_command_expect_response_handler(command_: str, password_: str) -> bool:
+    """Execute SCP command with pexpect and handle expected responses.
+
+    Handles both password prompts and host key verification prompts.
+    """
+    process = None
+    try:
+        # Enable more verbose logging for debugging
+        process = pexpect.spawn(command_, timeout=60)  # Increased timeout
+
+        # Enable logging of all pexpect interactions for debugging
+        if logging.getLogger().isEnabledFor(logging.DEBUG):
+            process.logfile = sys.stdout.buffer
+
+        # More precise host key prompt regex
+        host_key_prompt = r"Are you sure you want to continue connecting \(yes/no(/\[fingerprint\])?\)\?"
+        password_prompt = r"[Pp]assword:"
+        permission_denied = r"Permission denied"
+        no_such_file = r"No such file or directory"
+
+        # Add iteration limit to prevent infinite loops
+        max_iterations = 10
+        iteration_count = 0
+
+        while iteration_count < max_iterations:
+            iteration_count += 1
+
+            index = process.expect([
+                host_key_prompt,  # 0: Host key verification
+                password_prompt,  # 1: Password prompt
+                permission_denied,  # 2: Permission denied
+                no_such_file,  # 3: File not found
+                pexpect.EOF,  # 4: Command completed
+                pexpect.TIMEOUT  # 5: Timeout
+            ])
+
+            if index == 0:  # Host key verification
+                logging.info("Responding to host key verification prompt")
+                process.sendline("yes")
+                continue
+
+            elif index == 1:  # Password prompt
+                if not password_:
+                    logging.error("Password prompt received but no password provided")
+                    return False
+                logging.info("Responding to password prompt")
+                process.sendline(password_)
+                continue
+
+            elif index == 2:  # Permission denied
+                logging.error("Permission denied - check credentials and file permissions")
+                return False
+
+            elif index == 3:  # File not found
+                logging.error("File not found on remote server")
+                return False
+
+            elif index == 4:  # EOF - command completed
+                break
+
+            else:  # Timeout
+                logging.error(f"Command timed out after {iteration_count} iterations.")
+                # Try to read any remaining output for debugging
+                try:
+                    remaining_output = process.read_nonblocking(size=1000, timeout=1)
+                    logging.error(f"Remaining output: {remaining_output}")
+                except:
+                    pass
+                return False
+
+        if iteration_count >= max_iterations:
+            logging.error(f"Too many prompt iterations ({max_iterations}), possible infinite loop")
+            return False
+
+        # Check both exit status and signal status
+        process.close()
+
+        if process.exitstatus is not None:
+            if process.exitstatus == 0:
+                logging.info("SCP command completed successfully")
+                return True
+            else:
+                # Try to get more details about the error
+                if hasattr(process, 'before') and process.before:
+                    logging.error(f"Command failed with exit code: {process.exitstatus}")
+                    logging.error(f"Command output: {process.before}")
+                return False
+        elif process.signalstatus is not None:
+            logging.error(f"Command terminated by signal: {process.signalstatus}")
+            return False
+        else:
+            logging.error("Command completed but status is unknown")
+            return False
+
+    except pexpect.exceptions.TIMEOUT:
+        logging.error(f"Command timed out: {command_}")
+        return False
+    except pexpect.exceptions.EOF:
+        logging.error(f"Unexpected EOF from command: {command_}")
+        if hasattr(process, 'before') and process.before:
+            logging.error(f"Output before EOF: {process.before}")
+        return False
+    except Exception as e:
+        logging.error(f"Unexpected error executing command: {e}")
+        return False
+    finally:
+        # Correct process cleanup for pexpect
+        if process and process.isalive():
+            try:
+                process.close(force=True)
+            except:
+                # Fallback: send SIGTERM signal directly
+                try:
+                    process.kill(signal.SIGTERM)
+                except:
+                    pass  # Best effort cleanup
+
+    # Explicit return for any case that falls through
+    return False
 
 
 def configure_logger(level: str | int, log_file_dir_path: str | None = None, log_file_name: str | None = None) -> None:
@@ -1644,6 +1868,7 @@ def is_first_param_list_type(func: Callable):
                 getattr(param_type, "__origin__", None) == list or
                 getattr(param_type, "__origin__", None) == List)
     return False
+
 
 def find_files_with_regex(directory, pattern):
     regex = re.compile(pattern)

@@ -5,10 +5,10 @@ from typing import Type, Callable, ClassVar, List, Dict, Final
 import websockets
 from websockets.exceptions import ConnectionClosedOK, ConnectionClosedError, ConnectionClosed
 import asyncio
-import json
 import logging
 from threading import RLock
 import urllib.parse
+import orjson
 
 from FluxPythonUtils.scripts.ws_reader_lite import WSReaderLite
 
@@ -86,7 +86,7 @@ class WSReader(WSReaderLite):
     def handle_json_str(json_str: str, ws_cont):
         json_data = None
         try:
-            json_data = json.loads(json_str)
+            json_data = orjson.loads(json_str)
         except Exception as e:
             logging.exception(f"dropping update, json loads failed, no json_data from json_str"
                               f"first update for {ws_cont.ModelClassTypeList}"

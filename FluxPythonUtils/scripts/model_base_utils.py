@@ -240,7 +240,6 @@ class MsgspecBaseModel(msgspec.Struct, kw_only=True):
         except TypeError as e:
             raise TypeError(f"Failed to create {cls.__name__} with {df=}")
 
-
     def update_from_df(self, df: polars.DataFrame) -> bool:
         """
         Updates object members with matching named entries from the DataFrame.

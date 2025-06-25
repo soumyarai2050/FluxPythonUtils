@@ -4,14 +4,21 @@ import os
 import logging
 import re
 import threading
-from typing import List, Dict, Type, Final
+from typing import List, Dict, Type, Final, Any
 import yaml
 from pathlib import PurePath, Path
 from datetime import datetime
 
 # 3rd party packages
+from pendulum import DateTime
 import pandas as pd
-import polars as pl
+from pandas import Timestamp
+try:
+    import polars as pl
+
+    has_polars = True
+except ImportError:
+    has_polars = False
 
 # FluxPythonUtils Modules
 from FluxPythonUtils.scripts.yaml_importer import YAMLImporter
@@ -19,6 +26,46 @@ from FluxPythonUtils.scripts.model_base_utils import MsgspecBaseModel
 
 
 LOG_FORMAT: Final[str] = "%(asctime)s : %(levelname)s : [%(filename)s : %(lineno)d] : %(message)s"
+
+
+def fill_df_col_empty_values(df, accessed_data_col, fill_data_column):
+    """
+    Fill empty/invalid values in accessed_col with values from overwrite_column.
+
+    Args:
+        df: pandas or polars dataframe
+        accessed_data_col: column name to check for empty values
+        fill_data_column: column name to get replacement values from
+
+    Returns:
+        DataFrame with updated values
+    """
+
+    # Check if it's a pandas DataFrame
+    if isinstance(df, pd.DataFrame):
+        # Create a mask for empty/invalid values (NaN, None, or empty string)
+        stripped_values = df[accessed_data_col].astype(str).str.strip()
+        mask = df[accessed_data_col].isna() | (stripped_values == '')
+        # Copy values from overwrite_column to accessed_col where mask is True
+        df.loc[mask, accessed_data_col] = df.loc[mask, fill_data_column]
+        return df
+
+    # Check if it's a polars DataFrame
+    elif has_polars and isinstance(df, pl.DataFrame):
+        # Polars way: Create a new column with the correct values
+        # Check for null or empty/whitespace strings
+        return df.with_column(
+            pl.when(
+                pl.col(accessed_data_col).is_null() |
+                (pl.col(accessed_data_col).cast(pl.Utf8).str.strip() == '')
+            )
+            .then(pl.col(fill_data_column))
+            .otherwise(pl.col(accessed_data_col))
+            .alias(accessed_data_col)
+        )
+
+    else:
+        raise TypeError("Input must be a pandas DataFrame or a polars DataFrame")
 
 
 def find_acronyms_in_string(data: str) -> List[str]:
@@ -270,3 +317,12 @@ class YAMLConfigurationManager:
                 err_str = f"No file: {config_file_path} exist"
                 logging.exception(err_str)
                 raise Exception(err_str)
+
+
+def enc_hook(obj: Any) -> Any:
+    if isinstance(obj, DateTime):
+        return obj.isoformat()
+    elif isinstance(obj, datetime):
+        return obj.isoformat()
+    elif isinstance(obj, Timestamp):
+        return obj.isoformat()

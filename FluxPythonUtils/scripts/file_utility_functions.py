@@ -15,6 +15,7 @@ import getpass
 # 3rd party packages
 import pandas as pd
 import polars as pl
+from orjson import orjson
 
 # FluxPythonUtils Modules
 from FluxPythonUtils.scripts.yaml_importer import YAMLImporter
@@ -23,6 +24,7 @@ from FluxPythonUtils.scripts.file_n_general_utility_functions import (
     pandas_df_to_model_obj_list, polars_df_to_model_obj_list, LOG_FORMAT, file_exist)
 
 MsgspecModel = TypeVar('MsgspecModel', bound=MsgspecBaseModel)
+
 
 class EmptyFileError(Exception):
     """Exception raised for unexpected empty file.
@@ -37,7 +39,8 @@ class EmptyFileError(Exception):
         super().__init__(f"{self.message}, file_path: {self.file_path}")
 
 
-def csv_to_xlsx(file_name: str, csv_data_dir: PurePath | None = None, xlsx_data_dir: PurePath | None = None):
+def csv_to_xlsx(file_name: str, csv_data_dir: PurePath | None = None, xlsx_data_dir: PurePath | None = None,
+                col_format_dict: Dict[int, str] | None = None):
     if csv_data_dir is None:
         csv_data_dir = PurePath(__file__).parent / "data"
     if xlsx_data_dir is None:
@@ -45,13 +48,40 @@ def csv_to_xlsx(file_name: str, csv_data_dir: PurePath | None = None, xlsx_data_
     csv_path = PurePath(csv_data_dir / f"{file_name}.csv")
     xlsx_path = PurePath(xlsx_data_dir / f"{file_name}.xlsx")
     csv_as_df = pd.read_csv(str(csv_path))
-    with pd.ExcelWriter(str(xlsx_path)) as xlsx_writer:
-        csv_as_df.to_excel(xlsx_writer, index=False, header=True, sheet_name="target")
+    xlsx_writer = pd.ExcelWriter(str(xlsx_path), engine="xlsxwriter")
+    sheet_name = "target"
+    csv_as_df.to_excel(xlsx_writer, index=False, header=True, sheet_name=sheet_name)
+    if col_format_dict:
+        workbook = xlsx_writer.book
+        ws = xlsx_writer.sheets[sheet_name]
+        ws.autofit()
+        notional_format = workbook.add_format({'num_format': '$ ###,##0'})
+        dollar_format = workbook.add_format({'num_format': '$ #,##0.00'})
+        percent_format = workbook.add_format({'num_format': '0.00 %'})
+        bold_italic_format = workbook.add_format({'bold': True, 'italic': True})
+        for col_pos, col_format in col_format_dict.items():
+            if col_format == "dollar":
+                ws.set_column(col_pos, col_pos, 10, dollar_format)
+            elif col_format == "notional":
+                ws.set_column(col_pos, col_pos, 12, notional_format)
+            elif col_format == "percent":
+                ws.set_column(col_pos, col_pos, 6, percent_format)
+            elif col_format == "bold_italic_format":
+                ws.set_column(col_pos, col_pos, None, bold_italic_format)
+            else:
+                logging.warning(f"ignoring unsupported col_format: {col_format} passed for col: {col_pos}")
+    xlsx_writer.close()
+
+
+def get_fieldnames_from_record_type(record_type) -> List[str]:
+    keys_to_exclude = ["is_time_series", "enable_large_db_objects"]
+    fieldnames = [key for key in record_type.__annotations__.keys() if key not in keys_to_exclude]
+    return fieldnames
 
 
 def dict_or_list_records_csv_writer_ext(file_name: str, records: Dict | List, record_type,
                                         data_dir: PurePath | None = None):
-    fieldnames = record_type.__annotations__.keys()
+    fieldnames = get_fieldnames_from_record_type(record_type)
     dict_or_list_records_csv_writer(file_name, records, fieldnames, record_type, data_dir)
 
 
@@ -98,6 +128,62 @@ def get_csv_path_from_name_n_dir(file_name: str, data_dir: PurePath | None = Non
         data_dir = PurePath(__file__).parent / "data"
     return PurePath(data_dir / f"{file_name}.csv")
 
+
+def pandas_to_polars_dtypes(pandas_dtypes) -> dict:
+    """
+    Convert Pandas dtypes dictionary to Polars compatible dtypes/schema_overrides.
+    Args:
+        pandas_dtypes (dict): Dictionary of column names and their Pandas dtypes
+
+    Returns:
+        dict: Dictionary of column names and their corresponding Polars dtypes
+
+    Example:
+        pandas_dtypes = {
+            'col1': 'int64',
+            'col2': 'float64',
+            'col3': 'object',
+            'col4': 'datetime64[ns]',
+            'col5': 'bool'
+        }
+        polars_dtypes = pandas_to_polars_dtypes(pandas_dtypes)
+    """
+    # Mapping of pandas dtypes to polars dtypes
+    dtype_mapping = {
+        # Numeric types
+        'int32': pl.Int32,
+        'int64': pl.Int64,
+        'float32': pl.Float32,
+        'float64': pl.Float64,
+        # String types
+        'object': pl.Utf8,
+        'string': pl.Utf8,
+        'str': pl.Utf8,
+        # Boolean type
+        'bool': pl.Boolean,
+        # Datetime types
+        'datetime64[ns]': pl.Datetime,
+        'datetime64': pl.Datetime,
+        'timedelta[ns]': pl.Duration,
+        'timedelta64': pl.Duration,
+    }
+    polars_dtypes = {}
+    for column, dtype in pandas_dtypes.items():
+        # Convert dtype to string format if it's not already
+        dtype_str = str(dtype)
+        # Handle numpy dtype strings
+        if dtype_str.startswith('datetime64'):
+            polars_dtypes[column] = pl.Datetime
+        elif dtype_str.startswith('timedelta64'):
+            polars_dtypes[column] = pl.Duration
+        else:
+            # Remove any additional information (like [ns])
+            base_dtype = dtype_str.split('[')[0]
+            # Get corresponding polars dtype or default to Utf8
+            polars_dtypes[column] = dtype_mapping.get(base_dtype, pl.Utf8)
+    return polars_dtypes
+
+
 def dict_or_list_records_csv_reader(file_name: str, MsgspecType: Type[MsgspecBaseModel],
                                     data_dir: PurePath | None = None, rename_col_names_to_snake_case: bool = False,
                                     rename_col_names_to_lower_case: bool = True,
@@ -123,7 +209,7 @@ def dict_or_list_records_pandas_csv_reader(MsgspecType: Type[MsgspecBaseModel], 
     """
     At this time the method only supports list of msgspec_type extraction form csv using pandas
     """
-    # by setting keep_default_na=False, pandas will ignore its built‐in list of default strings that are
+    # by setting keep_default_na=False, pandas will ignore its built-in list of default strings that are
     # normally recognized as missing values.
     if dtype is not None:
         read_df = pd.read_csv(csv_path, keep_default_na=False, dtype=dtype)
@@ -142,7 +228,12 @@ def dict_or_list_records_polars_csv_reader(MsgspecType: Type[MsgspecBaseModel], 
     """
     # null_values tells Polars not to treat any values as null unless you explicitly specify them. In
     # dict_or_list_records_pandas_csv_reader we do similar with keep_default_na=False
-    read_df = pl.read_csv(str(csv_path), null_values=[], schema_overrides=dtype)
+    # default infer_schema_length is 100
+    if dtype is not None:
+        polars_dtype = pandas_to_polars_dtypes(dtype)
+        read_df = pl.read_csv(str(csv_path), null_values=[], infer_schema_length=10000, schema_overrides=polars_dtype)
+    else:
+        read_df = pl.read_csv(str(csv_path), null_values=[], infer_schema_length=10000)
     return polars_df_to_model_obj_list(read_df, MsgspecType, rename_col_names_to_snake_case,
                                        rename_col_names_to_lower_case)
 
