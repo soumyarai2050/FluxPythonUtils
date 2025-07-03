@@ -55,8 +55,8 @@ def csv_to_xlsx(file_name: str, csv_data_dir: PurePath | None = None, xlsx_data_
         workbook = xlsx_writer.book
         ws = xlsx_writer.sheets[sheet_name]
         ws.autofit()
-        notional_format = workbook.add_format({'num_format': '$ ###,##0'})
-        dollar_format = workbook.add_format({'num_format': '$ #,##0.00'})
+        notional_format = workbook.add_format({'num_format': '$  ###,##0'})
+        dollar_format = workbook.add_format({'num_format': '$  #,##0.00'})
         percent_format = workbook.add_format({'num_format': '0.00 %'})
         bold_italic_format = workbook.add_format({'bold': True, 'italic': True})
         for col_pos, col_format in col_format_dict.items():
@@ -74,7 +74,7 @@ def csv_to_xlsx(file_name: str, csv_data_dir: PurePath | None = None, xlsx_data_
 
 
 def get_fieldnames_from_record_type(record_type) -> List[str]:
-    keys_to_exclude = ["is_time_series", "enable_large_db_objects"]
+    keys_to_exclude = ["is_time_series", "enable_large_db_object"]
     fieldnames = [key for key in record_type.__annotations__.keys() if key not in keys_to_exclude]
     return fieldnames
 
@@ -129,15 +129,13 @@ def get_csv_path_from_name_n_dir(file_name: str, data_dir: PurePath | None = Non
     return PurePath(data_dir / f"{file_name}.csv")
 
 
-def pandas_to_polars_dtypes(pandas_dtypes) -> dict:
+def pandas_to_polars_dtypes(pandas_dtypes: dict) -> dict:
     """
-    Convert Pandas dtypes dictionary to Polars compatible dtypes/schema_overrides.
+    Convert Pandas dtype dictionary to Polars compatible dtypes/schema_overrides.
     Args:
         pandas_dtypes (dict): Dictionary of column names and their Pandas dtypes
-
     Returns:
         dict: Dictionary of column names and their corresponding Polars dtypes
-
     Example:
         pandas_dtypes = {
             'col1': 'int64',
@@ -161,10 +159,10 @@ def pandas_to_polars_dtypes(pandas_dtypes) -> dict:
         'str': pl.Utf8,
         # Boolean type
         'bool': pl.Boolean,
-        # Datetime types
+        # DateTime types
         'datetime64[ns]': pl.Datetime,
         'datetime64': pl.Datetime,
-        'timedelta[ns]': pl.Duration,
+        'timedelta64[ns]': pl.Duration,
         'timedelta64': pl.Duration,
     }
     polars_dtypes = {}
@@ -189,6 +187,9 @@ def dict_or_list_records_csv_reader(file_name: str, MsgspecType: Type[MsgspecBas
                                     rename_col_names_to_lower_case: bool = True,
                                     no_throw: bool = False,
                                     dtype: Dict | None = None) -> List[MsgspecModel]:
+    """
+    At this time the method only supports list of msgspec_type extraction from csv
+    """
     if data_dir is None:
         data_dir = PurePath(__file__).parent / "data"
     if not file_name.endswith(".csv"):
@@ -201,6 +202,7 @@ def dict_or_list_records_csv_reader(file_name: str, MsgspecType: Type[MsgspecBas
     elif not no_throw:
         raise Exception(f"dict_or_list_records_csv_reader invoked on empty or no csv file: {str_csv_path}")
     return []
+
 
 def dict_or_list_records_pandas_csv_reader(MsgspecType: Type[MsgspecBaseModel], csv_path: PurePath | None = None,
                                            rename_col_names_to_snake_case: bool = False,

@@ -114,7 +114,7 @@ class ThreadSafeAsyncLock:
 
 def get_years_remaining_in_float(end_date: datetime):
     """
-    Calculate the remaining period to end_data in years
+    Calculate the remaining period to end_date in years
 
     Args:
         end_date (datetime): Obvious
@@ -320,9 +320,8 @@ def get_json_array_as_msgspec_dict(json_key: str, json_data_list, MsgspecType: T
     return msgspec_dict
 
 
-def scp_handler_scp_transfer_with_password_authentication(scp_src_path: PurePath, scp_src_user: str,
-                                                          scp_src_server: str, scp_dest_dir: PurePath,
-                                                          scp_password: str) -> bool:
+def scp_handler(scp_src_path: PurePath, scp_src_user: str, scp_src_server: str,
+                scp_dest_dir: PurePath, scp_password: str) -> bool:
     """Handle SCP file transfer with password authentication.
 
     Args:
@@ -373,12 +372,12 @@ def scp_handler_scp_transfer_with_password_authentication(scp_src_path: PurePath
         return False
 
     # Quote only the path part, not the entire remote spec
-    # Handle windows path separators properly
+    # Handle Windows path separators properly
     safe_src_path = shlex.quote(str(scp_src_path))
     remote_spec = f"{scp_src_user}@{scp_src_server}:{safe_src_path}"
 
     # Use forward slashes for destination (SCP expects POSIX-style paths)
-    dest_with_dot = str(dest_path.replace('\\', '/')) + "/."
+    dest_with_dot = str(dest_path).replace('\\', '/') + "/."
     safe_dest = shlex.quote(dest_with_dot)
 
     scp_command = f"scp -q -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {remote_spec} {safe_dest}"
@@ -420,7 +419,7 @@ def scp_handler_scp_transfer_with_password_authentication(scp_src_path: PurePath
         return False
     except PermissionError as e:
         logging.warning(f"Cannot verify file transfer due to permissions: {e}")
-        return True  # Assume success since scp didn't fail
+        return True  # Assume success since SCP didn't fail
     except Exception as e:
         logging.warning(f"Unexpected error during file verification: {e}")
         return True  # Only for truly unexpected errors
@@ -487,7 +486,7 @@ def pexpect_command_expect_response_handler(command_: str, password_: str) -> bo
                 break
 
             else:  # Timeout
-                logging.error(f"Command timed out after {iteration_count} iterations.")
+                logging.error(f"Command timed out after {iteration_count} iterations")
                 # Try to read any remaining output for debugging
                 try:
                     remaining_output = process.read_nonblocking(size=1000, timeout=1)
@@ -508,9 +507,9 @@ def pexpect_command_expect_response_handler(command_: str, password_: str) -> bo
                 logging.info("SCP command completed successfully")
                 return True
             else:
+                logging.error(f"Command failed with exit code: {process.exitstatus}")
                 # Try to get more details about the error
                 if hasattr(process, 'before') and process.before:
-                    logging.error(f"Command failed with exit code: {process.exitstatus}")
                     logging.error(f"Command output: {process.before}")
                 return False
         elif process.signalstatus is not None:
@@ -525,7 +524,7 @@ def pexpect_command_expect_response_handler(command_: str, password_: str) -> bo
         return False
     except pexpect.exceptions.EOF:
         logging.error(f"Unexpected EOF from command: {command_}")
-        if hasattr(process, 'before') and process.before:
+        if process and hasattr(process, 'before') and process.before:
             logging.error(f"Output before EOF: {process.before}")
         return False
     except Exception as e:
@@ -537,8 +536,8 @@ def pexpect_command_expect_response_handler(command_: str, password_: str) -> bo
             try:
                 process.close(force=True)
             except:
-                # Fallback: send SIGTERM signal directly
                 try:
+                    # Fallback: send SIGTERM signal directly
                     process.kill(signal.SIGTERM)
                 except:
                     pass  # Best effort cleanup
