@@ -797,7 +797,8 @@ def _find_matching_list(underlying_updated_list: List, stored_list_of_list: List
     return matching_list
 
 
-def compare_n_patch_list(stored_list: List, updated_list: List):
+def compare_n_patch_list(stored_list: List, updated_list: List,
+                         avoid_list_item_rem_on_empty_dict_with_only_id: bool = False) -> None:
     if stored_list:
         # get datatype of 1st list element, others must be same datatype (multi datatype list patch not-supported)
         if isinstance(stored_list[0], list):  # list of list
@@ -817,7 +818,8 @@ def compare_n_patch_list(stored_list: List, updated_list: List):
                     # this underlying updated list is new - append to stored_list (stored list of list)
                     stored_list.append(nested_updated_list)
                 else:
-                    compare_n_patch_list(nested_stored_list, nested_updated_list)
+                    compare_n_patch_list(nested_stored_list, nested_updated_list,
+                                         avoid_list_item_rem_on_empty_dict_with_only_id)
 
         elif isinstance(stored_list[0], dict):
             # Validation all elements of updated list must be of dict type
@@ -852,13 +854,25 @@ def compare_n_patch_list(stored_list: List, updated_list: List):
                             # If update_dict only has id and the id is same as in stored_list - delete entry
                             # Update list has id checked above + len == 1 confirms all it has is id
                             if len(update_dict) == 1:
-                                stored_list.remove(stored_list[stored_index])
-                                stored_id_idx_dict = \
-                                    {stored_obj.get("_id"): idx for idx, stored_obj in enumerate(stored_list)}
+                                if not avoid_list_item_rem_on_empty_dict_with_only_id:
+                                    stored_list.remove(stored_list[stored_index])
+                                    stored_id_idx_dict = \
+                                        {stored_obj.get("_id"): idx for idx, stored_obj in enumerate(stored_list)}
+                                else:
+                                    # avoid item deletion on empty dict with only id, just keeping empty obj with
+                                    # id in patched obj - required for cases where we use compare_n_patch from
+                                    # pre callback to enrich update obj but don't want entries with only id to be
+                                    # deleted unless compare_n_patch is not in generic db layer. Calling
+                                    # compare_n_patch from pre callback without disabling this feature
+                                    # will remove list item entries with only id and when this obj is reached to generic
+                                    # db layer, db will not be affected as update obj reaching to generic db layer will
+                                    # not have any item with only id
+                                    stored_list[stored_index] = update_dict
                             else:
                                 # patch operation on dict in stored_list to update
                                 stored_list[stored_index] = \
-                                    compare_n_patch_dict(stored_list[stored_index], update_dict)
+                                    compare_n_patch_dict(stored_list[stored_index], update_dict,
+                                                         avoid_list_item_rem_on_empty_dict_with_only_id)
                     else:
                         err_str = "updated_list's dict elements don't have id field but stored_list's " \
                                   "elements do;;;"
@@ -894,19 +908,22 @@ def compare_n_patch_list(stored_list: List, updated_list: List):
             stored_list.extend(updated_list)
 
 
-def compare_n_patch_dict(stored_dict: Dict, updated_dict: Dict):
+def compare_n_patch_dict(stored_dict: Dict, updated_dict: Dict,
+                         avoid_list_item_rem_on_empty_dict_with_only_id: bool = False):
     for key, updated_value in updated_dict.items():
         stored_value = stored_dict.get(key)
         if isinstance(stored_value, dict):
             if updated_value is not None:
                 # dict value type is container, pass extracted (reference modified directly)
-                compare_n_patch_dict(stored_value, updated_value)
+                compare_n_patch_dict(stored_value, updated_value,
+                                     avoid_list_item_rem_on_empty_dict_with_only_id)
             else:
                 stored_dict[key] = updated_value
         elif isinstance(stored_value, list):
             if updated_value is not None:
                 # list value type is container, pass extracted (reference modified directly)
-                compare_n_patch_list(stored_value, updated_value)
+                compare_n_patch_list(stored_value, updated_value,
+                                     avoid_list_item_rem_on_empty_dict_with_only_id)
             else:
                 stored_dict[key] = updated_value
         elif stored_value != updated_value:  # avoid unwarranted lookup(simple types)/construction(complex types)
